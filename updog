@@ -126,6 +126,7 @@ api_get() {
   api_response=$(
     printf 'header = "x-api-key: %s"\nheader = "accept: application/json"\n' "$api_key" |
       curl \
+        -q \
         --config - \
         --silent \
         --show-error \

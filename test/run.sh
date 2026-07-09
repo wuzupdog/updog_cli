@@ -72,6 +72,42 @@ assert_file_line() {
   fi
 }
 
+assert_file_pair() {
+  test_name=$1
+  file=$2
+  first=$3
+  second=$4
+  previous=
+  found=0
+
+  while IFS= read -r line; do
+    if [ "$previous" = "$first" ] && [ "$line" = "$second" ]; then
+      found=1
+      break
+    fi
+    previous=$line
+  done <"$file"
+
+  if [ "$found" -eq 1 ]; then
+    pass "$test_name"
+  else
+    fail "$test_name" "expected consecutive arguments '$first' and '$second' in $file"
+  fi
+}
+
+assert_first_file_line() {
+  test_name=$1
+  file=$2
+  expected=$3
+  actual=$(sed -n '1p' "$file")
+
+  if [ "$actual" = "$expected" ]; then
+    pass "$test_name"
+  else
+    fail "$test_name" "expected first line '$expected', got '$actual'"
+  fi
+}
+
 assert_file_excludes() {
   test_name=$1
   file=$2
@@ -118,10 +154,11 @@ run_cli logs search \
   --offset=50
 assert_status "log search succeeds" 0
 assert_stdout "successful API JSON is written to stdout" '{"data":[],"meta":{"total":0}}'
+assert_first_file_line "curl disables implicit user configuration first" "$FAKE_CURL_ARGS_FILE" "-q"
 assert_file_line "log search uses GET" "$FAKE_CURL_ARGS_FILE" "--get"
 assert_file_line "log search targets the configured base URL" "$FAKE_CURL_ARGS_FILE" "https://example.test/updog/api/v1/logs"
-assert_file_line "query is delegated to curl URL encoding" "$FAKE_CURL_ARGS_FILE" "q=space & slash/plus+"
-assert_file_line "trace ID uses the API parameter name" "$FAKE_CURL_ARGS_FILE" "trace_id=trace/123"
+assert_file_pair "query is delegated to curl URL encoding" "$FAKE_CURL_ARGS_FILE" "--data-urlencode" "q=space & slash/plus+"
+assert_file_pair "trace ID uses the API parameter name" "$FAKE_CURL_ARGS_FILE" "--data-urlencode" "trace_id=trace/123"
 assert_file_line "sort field is sent" "$FAKE_CURL_ARGS_FILE" "sort_by=logged_at"
 assert_file_line "limit is sent" "$FAKE_CURL_ARGS_FILE" "limit=25"
 assert_file_excludes "API key is absent from curl argv" "$FAKE_CURL_ARGS_FILE" "$UPDOG_API_KEY"
@@ -137,7 +174,7 @@ run_cli errors search \
   --offset 200
 assert_status "error search succeeds" 0
 assert_file_line "error search targets its endpoint" "$FAKE_CURL_ARGS_FILE" "https://example.test/updog/api/v1/errors"
-assert_file_line "error query is delegated to curl URL encoding" "$FAKE_CURL_ARGS_FILE" "q=ArgumentError % value"
+assert_file_pair "error query is delegated to curl URL encoding" "$FAKE_CURL_ARGS_FILE" "--data-urlencode" "q=ArgumentError % value"
 assert_file_line "error status is sent" "$FAKE_CURL_ARGS_FILE" "status=unresolved"
 assert_file_line "all-time search is sent" "$FAKE_CURL_ARGS_FILE" "since=all"
 
