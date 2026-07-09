@@ -20,6 +20,40 @@ type memorySecrets struct {
 	values map[string]string
 }
 
+type hookSecrets struct {
+	base        *memorySecrets
+	afterSet    func()
+	afterDelete func()
+}
+
+func (store *hookSecrets) Get(id string) (string, error) {
+	return store.base.Get(id)
+}
+
+func (store *hookSecrets) Set(id, secret string) error {
+	if err := store.base.Set(id, secret); err != nil {
+		return err
+	}
+	if store.afterSet != nil {
+		hook := store.afterSet
+		store.afterSet = nil
+		hook()
+	}
+	return nil
+}
+
+func (store *hookSecrets) Delete(id string) error {
+	if err := store.base.Delete(id); err != nil {
+		return err
+	}
+	if store.afterDelete != nil {
+		hook := store.afterDelete
+		store.afterDelete = nil
+		hook()
+	}
+	return nil
+}
+
 func newMemorySecrets() *memorySecrets {
 	return &memorySecrets{values: map[string]string{}}
 }
@@ -55,10 +89,23 @@ type cliResult struct {
 }
 
 func runTestCLI(t *testing.T, configPath string, secrets secretStore, env map[string]string, input string, terminal bool, args ...string) cliResult {
+	return runTestCLIWith(t, configPath, secrets, env, input, terminal, nil, args...)
+}
+
+func runTestCLIWith(
+	t *testing.T,
+	configPath string,
+	secrets secretStore,
+	env map[string]string,
+	input string,
+	terminal bool,
+	configure func(*Options),
+	args ...string,
+) cliResult {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
-	status := Run(Options{
-		Version:          "0.2.0-test",
+	options := Options{
+		Version:          "0.3.0-test",
 		Args:             args,
 		In:               strings.NewReader(input),
 		Out:              &stdout,
@@ -73,7 +120,11 @@ func runTestCLI(t *testing.T, configPath string, secrets secretStore, env map[st
 		},
 		Getenv: func(name string) string { return env[name] },
 		Getwd:  func() (string, error) { return "/work/mnm", nil },
-	})
+	}
+	if configure != nil {
+		configure(&options)
+	}
+	status := Run(options)
 	return cliResult{status: status, stdout: stdout.String(), stderr: stderr.String()}
 }
 
@@ -196,6 +247,128 @@ func TestEnvironmentKeyWorksWithoutLogin(t *testing.T) {
 	if result.status != 0 {
 		t.Fatalf("status = %d, stderr = %s", result.status, result.stderr)
 	}
+}
+
+func TestEnvironmentKeyRejectsAnExplicitProjectProfile(t *testing.T) {
+	result := runTestCLI(t, filepath.Join(t.TempDir(), "config.json"), newMemorySecrets(), map[string]string{
+		"UPDOG_API_KEY": "updog_ci_key",
+	}, "", false, "--project", "production", "logs", "search")
+
+	if result.status != 2 || !strings.Contains(result.stderr, "cannot be combined") {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestBaseURLRequiresTLSExceptOnLoopback(t *testing.T) {
+	valid := []string{
+		"https://wuzupdog.com",
+		"http://localhost:4000",
+		"http://worker.localhost:4000",
+		"http://127.0.0.1:4000",
+		"http://[::1]:4000",
+	}
+	for _, value := range valid {
+		if _, err := normalizeBaseURL(value); err != nil {
+			t.Errorf("normalizeBaseURL(%q): %v", value, err)
+		}
+	}
+
+	for _, value := range []string{"http://example.com", "http://192.0.2.10:4000"} {
+		if _, err := normalizeBaseURL(value); err == nil || !strings.Contains(err.Error(), "HTTPS") {
+			t.Errorf("normalizeBaseURL(%q) error = %v", value, err)
+		}
+	}
+}
+
+func TestStoredRemoteHTTPProfileIsRejectedAfterUpgrade(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	cfg := configFile{Version: configVersion, CurrentProject: "legacy", Projects: map[string]project{
+		"legacy": {URL: "http://192.0.2.10:4000", CredentialID: "legacy-credential"},
+	}}
+	if err := saveConfig(configPath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	secrets := newMemorySecrets()
+	if err := secrets.Set("legacy-credential", "updog_legacy_key"); err != nil {
+		t.Fatal(err)
+	}
+
+	result := runTestCLI(t, configPath, secrets, nil, "", false, "logs", "search")
+	if result.status != 2 || !strings.Contains(result.stderr, "HTTPS") || !strings.Contains(result.stderr, "login again") {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestCredentialChangesRollBackWhenConfigPersistenceFails(t *testing.T) {
+	t.Run("login restores the prior key", func(t *testing.T) {
+		configPath := filepath.Join(t.TempDir(), "config.json")
+		cfg := configFile{Version: configVersion, CurrentProject: "mnm", Projects: map[string]project{
+			"mnm": {URL: "https://old.example", CredentialID: "mnm-credential"},
+		}}
+		if err := saveConfig(configPath, cfg); err != nil {
+			t.Fatal(err)
+		}
+
+		base := newMemorySecrets()
+		if err := base.Set("mnm-credential", "updog_old_key"); err != nil {
+			t.Fatal(err)
+		}
+		secrets := &hookSecrets{base: base, afterSet: func() {
+			if err := os.Remove(configPath); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(configPath, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}}
+		app, err := newApp(Options{ConfigPath: configPath, Secrets: secrets, Out: io.Discard, Err: io.Discard})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if err := app.persistLogin(globalOptions{}, "mnm", "https://new.example", "updog_new_key", project{}); err == nil {
+			t.Fatal("persistLogin succeeded despite config failure")
+		}
+		stored, err := base.Get("mnm-credential")
+		if err != nil || stored != "updog_old_key" {
+			t.Fatalf("credential after rollback = %q, %v", stored, err)
+		}
+	})
+
+	t.Run("logout restores the deleted key", func(t *testing.T) {
+		configPath := filepath.Join(t.TempDir(), "config.json")
+		cfg := configFile{Version: configVersion, CurrentProject: "mnm", Projects: map[string]project{
+			"mnm": {URL: "https://example.test", CredentialID: "mnm-credential"},
+		}}
+		if err := saveConfig(configPath, cfg); err != nil {
+			t.Fatal(err)
+		}
+
+		base := newMemorySecrets()
+		if err := base.Set("mnm-credential", "updog_old_key"); err != nil {
+			t.Fatal(err)
+		}
+		secrets := &hookSecrets{base: base, afterDelete: func() {
+			if err := os.Remove(configPath); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(configPath, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}}
+		app, err := newApp(Options{ConfigPath: configPath, Secrets: secrets, Out: io.Discard, Err: io.Discard})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if err := app.logout(globalOptions{}, nil); err == nil {
+			t.Fatal("logout succeeded despite config failure")
+		}
+		stored, err := base.Get("mnm-credential")
+		if err != nil || stored != "updog_old_key" {
+			t.Fatalf("credential after rollback = %q, %v", stored, err)
+		}
+	})
 }
 
 func TestProjectsListAndUse(t *testing.T) {

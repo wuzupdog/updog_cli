@@ -1,7 +1,10 @@
 package main
 
 import (
+	"context"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/wuzupdog/updog_cli/internal/cli"
 )
@@ -9,5 +12,7 @@ import (
 var version = "dev"
 
 func main() {
-	os.Exit(cli.Run(cli.Options{Version: version}))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	os.Exit(cli.Run(cli.Options{Version: version, Context: ctx}))
 }

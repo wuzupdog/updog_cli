@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"golang.org/x/term"
 )
@@ -25,6 +26,7 @@ type Options struct {
 	In      io.Reader
 	Out     io.Writer
 	Err     io.Writer
+	Context context.Context
 
 	Getenv           func(string) string
 	ConfigPath       string
@@ -34,6 +36,9 @@ type Options struct {
 	OutputIsTerminal func() bool
 	ReadPassword     func() (string, error)
 	Getwd            func() (string, error)
+	Sleep            func(context.Context, time.Duration) error
+	Now              func() time.Time
+	DeviceName       string
 }
 
 type app struct {
@@ -43,6 +48,7 @@ type app struct {
 	reader           *bufio.Reader
 	out              io.Writer
 	err              io.Writer
+	context          context.Context
 	getenv           func(string) string
 	configPath       string
 	secrets          secretStore
@@ -51,6 +57,9 @@ type app struct {
 	outputIsTerminal func() bool
 	readPassword     func() (string, error)
 	getwd            func() (string, error)
+	sleep            func(context.Context, time.Duration) error
+	now              func() time.Time
+	deviceName       string
 }
 
 type globalOptions struct {
@@ -96,6 +105,9 @@ func newApp(options Options) (*app, error) {
 	if options.Err == nil {
 		options.Err = os.Stderr
 	}
+	if options.Context == nil {
+		options.Context = context.Background()
+	}
 	if options.Getenv == nil {
 		options.Getenv = os.Getenv
 	}
@@ -131,6 +143,15 @@ func newApp(options Options) (*app, error) {
 	if options.Getwd == nil {
 		options.Getwd = os.Getwd
 	}
+	if options.Sleep == nil {
+		options.Sleep = sleepContext
+	}
+	if options.Now == nil {
+		options.Now = time.Now
+	}
+	if options.DeviceName == "" {
+		options.DeviceName = defaultDeviceName(options.Version)
+	}
 
 	return &app{
 		version:          options.Version,
@@ -139,6 +160,7 @@ func newApp(options Options) (*app, error) {
 		reader:           bufio.NewReader(options.In),
 		out:              options.Out,
 		err:              options.Err,
+		context:          options.Context,
 		getenv:           options.Getenv,
 		configPath:       options.ConfigPath,
 		secrets:          options.Secrets,
@@ -147,6 +169,9 @@ func newApp(options Options) (*app, error) {
 		outputIsTerminal: options.OutputIsTerminal,
 		readPassword:     options.ReadPassword,
 		getwd:            options.Getwd,
+		sleep:            options.Sleep,
+		now:              options.Now,
+		deviceName:       options.DeviceName,
 	}, nil
 }
 
@@ -254,6 +279,7 @@ func (a *app) login(globals globalOptions, args []string) error {
 		baseURL = defaultUpdogURL
 	}
 	fs.StringVar(&baseURL, "url", baseURL, "Updog server URL")
+	manual := fs.Bool("manual", false, "enter an existing read-only API key")
 	tokenStdin := fs.Bool("token-stdin", false, "read the API key from standard input")
 	if hasHelp(args) {
 		a.printLoginHelp()
@@ -265,10 +291,21 @@ func (a *app) login(globals globalOptions, args []string) error {
 	if fs.NArg() != 0 {
 		return usageError("login does not accept positional arguments")
 	}
+	normalizedURL, err := normalizeBaseURL(baseURL)
+	if err != nil {
+		return configError(err.Error())
+	}
 
+	if *manual || *tokenStdin {
+		return a.manualLogin(globals, normalizedURL, *tokenStdin)
+	}
+	return a.deviceLogin(globals, normalizedURL)
+}
+
+func (a *app) manualLogin(globals globalOptions, normalizedURL string, tokenStdin bool) error {
 	projectName := globals.project
 	if projectName == "" {
-		if !a.inputIsTerminal() || *tokenStdin {
+		if !a.inputIsTerminal() || tokenStdin {
 			return usageError("login requires --project when input is not interactive")
 		}
 		defaultName := "project"
@@ -287,13 +324,8 @@ func (a *app) login(globals globalOptions, args []string) error {
 		return usageError(err.Error())
 	}
 
-	normalizedURL, err := normalizeBaseURL(baseURL)
-	if err != nil {
-		return configError(err.Error())
-	}
-
 	var rawKey string
-	if *tokenStdin {
+	if tokenStdin {
 		line, err := a.reader.ReadString('\n')
 		if err != nil && !errors.Is(err, io.EOF) {
 			return configError("read API key from stdin: " + err.Error())
@@ -317,47 +349,69 @@ func (a *app) login(globals globalOptions, args []string) error {
 	}
 
 	client := apiClient{baseURL: normalizedURL, apiKey: apiKey, version: a.version, httpClient: a.httpClient}
-	if _, err := client.get(context.Background(), "/api/v1/logs", url.Values{"limit": {"1"}}); err != nil {
+	if _, err := client.get(a.context, "/api/v1/logs", url.Values{"limit": {"1"}}); err != nil {
 		return a.apiCommandError("login validation failed", err)
 	}
 
+	return a.persistLogin(globals, projectName, normalizedURL, apiKey, project{})
+}
+
+func (a *app) persistLogin(globals globalOptions, projectName, normalizedURL, apiKey string, metadata project) error {
 	cfg, err := loadConfig(a.configPath)
 	if err != nil {
 		return configError(err.Error())
 	}
-	existing, exists := cfg.Projects[projectName]
+	existing := cfg.Projects[projectName]
 	credentialID := existing.CredentialID
 	if credentialID == "" {
 		credentialID = newCredentialID(projectName, normalizedURL)
 	}
 
-	var oldSecret string
-	if exists {
-		oldSecret, _ = a.secrets.Get(credentialID)
+	oldSecret, secretErr := a.secrets.Get(credentialID)
+	hadOldSecret := secretErr == nil
+	if secretErr != nil && !errors.Is(secretErr, errSecretNotFound) {
+		return configError(secretErr.Error())
 	}
 	if err := a.secrets.Set(credentialID, apiKey); err != nil {
 		return configError(err.Error())
 	}
-	cfg.Projects[projectName] = project{URL: normalizedURL, CredentialID: credentialID}
+	metadata.URL = normalizedURL
+	metadata.CredentialID = credentialID
+	cfg.Projects[projectName] = metadata
 	cfg.CurrentProject = projectName
 	if err := saveConfig(a.configPath, cfg); err != nil {
-		if oldSecret != "" {
-			_ = a.secrets.Set(credentialID, oldSecret)
+		var rollbackErr error
+		if hadOldSecret {
+			rollbackErr = a.secrets.Set(credentialID, oldSecret)
 		} else {
-			_ = a.secrets.Delete(credentialID)
+			rollbackErr = a.secrets.Delete(credentialID)
 		}
-		return configError(err.Error())
+		return configPersistenceError(err, rollbackErr)
 	}
 
-	result := map[string]any{"data": map[string]any{
+	data := map[string]any{
 		"project": projectName,
 		"url":     normalizedURL,
 		"storage": "os_keyring",
-	}}
+	}
+	if metadata.ProjectID > 0 {
+		data["project_id"] = metadata.ProjectID
+	}
+	if metadata.ProjectName != "" {
+		data["project_name"] = metadata.ProjectName
+	}
+	if metadata.ProjectSlug != "" {
+		data["project_slug"] = metadata.ProjectSlug
+	}
+	result := map[string]any{"data": data}
 	if globals.json || !a.outputIsTerminal() {
 		return writeJSON(a.out, result)
 	}
-	fmt.Fprintf(a.out, "Logged in to %s as project %q.\n", normalizedURL, projectName)
+	if metadata.ProjectName != "" {
+		fmt.Fprintf(a.out, "Logged in to %s for %s as profile %q.\n", normalizedURL, metadata.ProjectName, projectName)
+	} else {
+		fmt.Fprintf(a.out, "Logged in to %s as project %q.\n", normalizedURL, projectName)
+	}
 	return nil
 }
 
@@ -384,8 +438,15 @@ func (a *app) logout(globals globalOptions, args []string) error {
 	if !ok {
 		return configError(fmt.Sprintf("project %q is not configured", name))
 	}
-	if err := a.secrets.Delete(entry.CredentialID); err != nil {
-		return configError(err.Error())
+	oldSecret, secretErr := a.secrets.Get(entry.CredentialID)
+	hadSecret := secretErr == nil
+	if secretErr != nil && !errors.Is(secretErr, errSecretNotFound) {
+		return configError(secretErr.Error())
+	}
+	if hadSecret {
+		if err := a.secrets.Delete(entry.CredentialID); err != nil {
+			return configError(err.Error())
+		}
 	}
 	delete(cfg.Projects, name)
 	if cfg.CurrentProject == name {
@@ -396,7 +457,11 @@ func (a *app) logout(globals globalOptions, args []string) error {
 		}
 	}
 	if err := saveConfig(a.configPath, cfg); err != nil {
-		return configError(err.Error())
+		var rollbackErr error
+		if hadSecret {
+			rollbackErr = a.secrets.Set(entry.CredentialID, oldSecret)
+		}
+		return configPersistenceError(err, rollbackErr)
 	}
 	if globals.json || !a.outputIsTerminal() {
 		return writeJSON(a.out, map[string]any{"data": map[string]any{"project": name, "logged_out": true}})
@@ -458,13 +523,24 @@ func (a *app) projectsList(globals globalOptions) error {
 		return configError(err.Error())
 	}
 	type row struct {
-		Name    string `json:"name"`
-		URL     string `json:"url"`
-		Current bool   `json:"current"`
+		Name        string `json:"name"`
+		URL         string `json:"url"`
+		Current     bool   `json:"current"`
+		ProjectID   int64  `json:"project_id,omitempty"`
+		ProjectName string `json:"project_name,omitempty"`
+		ProjectSlug string `json:"project_slug,omitempty"`
 	}
 	rows := make([]row, 0, len(cfg.Projects))
 	for _, name := range projectNames(cfg) {
-		rows = append(rows, row{Name: name, URL: cfg.Projects[name].URL, Current: cfg.CurrentProject == name})
+		entry := cfg.Projects[name]
+		rows = append(rows, row{
+			Name:        name,
+			URL:         entry.URL,
+			Current:     cfg.CurrentProject == name,
+			ProjectID:   entry.ProjectID,
+			ProjectName: entry.ProjectName,
+			ProjectSlug: entry.ProjectSlug,
+		})
 	}
 	if globals.json || !a.outputIsTerminal() {
 		return writeJSON(a.out, map[string]any{"data": rows, "meta": map[string]any{"total": len(rows)}})
@@ -474,13 +550,17 @@ func (a *app) projectsList(globals globalOptions) error {
 		return nil
 	}
 	tw := tabwriter.NewWriter(a.out, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "CURRENT\tPROJECT\tURL")
+	fmt.Fprintln(tw, "CURRENT\tPROFILE\tUPDOG PROJECT\tURL")
 	for _, item := range rows {
 		current := ""
 		if item.Current {
 			current = "*"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\n", current, item.Name, item.URL)
+		serverProject := item.ProjectName
+		if serverProject == "" {
+			serverProject = "-"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", current, item.Name, serverProject, item.URL)
 	}
 	return tw.Flush()
 }
@@ -625,6 +705,9 @@ type resolvedAuth struct {
 
 func (a *app) resolveAuth(requestedProject string) (resolvedAuth, error) {
 	if rawKey := a.getenv("UPDOG_API_KEY"); rawKey != "" {
+		if requestedProject != "" {
+			return resolvedAuth{}, configError("--project cannot be combined with UPDOG_API_KEY")
+		}
 		apiKey, err := validateAPIKey(rawKey)
 		if err != nil {
 			return resolvedAuth{}, configError(err.Error())
@@ -633,7 +716,7 @@ func (a *app) resolveAuth(requestedProject string) (resolvedAuth, error) {
 		if err != nil {
 			return resolvedAuth{}, configError(err.Error())
 		}
-		return resolvedAuth{project: requestedProject, baseURL: baseURL, apiKey: apiKey, source: "environment"}, nil
+		return resolvedAuth{baseURL: baseURL, apiKey: apiKey, source: "environment"}, nil
 	}
 
 	cfg, err := loadConfig(a.configPath)
@@ -651,6 +734,10 @@ func (a *app) resolveAuth(requestedProject string) (resolvedAuth, error) {
 	if !ok {
 		return resolvedAuth{}, configError(fmt.Sprintf("project %q is not configured; run updog projects list", name))
 	}
+	baseURL, err := normalizeBaseURL(entry.URL)
+	if err != nil {
+		return resolvedAuth{}, configError(fmt.Sprintf("stored URL for project %q is invalid: %v; run updog login again", name, err))
+	}
 	apiKey, err := a.secrets.Get(entry.CredentialID)
 	if errors.Is(err, errSecretNotFound) {
 		return resolvedAuth{}, configError(fmt.Sprintf("credential for project %q is missing; run updog login --project %s", name, name))
@@ -662,7 +749,14 @@ func (a *app) resolveAuth(requestedProject string) (resolvedAuth, error) {
 	if err != nil {
 		return resolvedAuth{}, configError("stored credential is invalid; run updog login again")
 	}
-	return resolvedAuth{project: name, baseURL: entry.URL, apiKey: apiKey, source: "os_keyring"}, nil
+	return resolvedAuth{project: name, baseURL: baseURL, apiKey: apiKey, source: "os_keyring"}, nil
+}
+
+func configPersistenceError(primary, rollback error) error {
+	if rollback != nil {
+		return configError(fmt.Sprintf("%v; credential rollback also failed: %v", primary, rollback))
+	}
+	return configError(primary.Error())
 }
 
 func (a *app) getAndRender(globals globalOptions, path string, query url.Values, kind string) error {
@@ -671,7 +765,7 @@ func (a *app) getAndRender(globals globalOptions, path string, query url.Values,
 		return err
 	}
 	client := apiClient{baseURL: auth.baseURL, apiKey: auth.apiKey, version: a.version, httpClient: a.httpClient}
-	body, err := client.get(context.Background(), path, query)
+	body, err := client.get(a.context, path, query)
 	if err != nil {
 		return a.apiCommandError("request failed", err)
 	}
@@ -780,7 +874,8 @@ Global options:
   --json          Force compact JSON output
 
 Authentication:
-  Interactive login stores read-only project keys in the OS keyring.
+  Login displays a URL and code for approving one read-only project.
+  The resulting key is stored in the OS keyring.
   UPDOG_API_KEY overrides stored credentials for CI and automation.
   UPDOG_URL changes the server URL for environment-key authentication.
 
@@ -788,11 +883,18 @@ When stdout is not a terminal, command results are JSON automatically.`)
 }
 
 func (a *app) printLoginHelp() {
-	fmt.Fprintln(a.out, `Usage: updog login [--project NAME] [--url URL] [--token-stdin]
+	fmt.Fprintln(a.out, `Usage: updog login [--project NAME] [--url URL]
+       updog login --manual [--project NAME] [--url URL]
+       updog login --token-stdin --project NAME [--url URL]
 
-Prompts securely for a read-only API key, validates it, and stores it in the
-operating system keyring. --token-stdin reads one key from standard input and
-requires --project. API keys are never accepted as command-line values.`)
+The default flow displays a URL and short code. Sign in through the browser,
+choose one project, and approve read-only logs and errors access. The CLI then
+stores the issued key in the operating system keyring.
+
+--project sets a local alias; otherwise the server project slug is used.
+--manual prompts for an existing read-only key. --token-stdin reads one key
+from standard input and requires --project. Keys are never accepted as
+command-line values.`)
 }
 
 func (a *app) printProjectsHelp() {
@@ -800,7 +902,8 @@ func (a *app) printProjectsHelp() {
   updog projects list
   updog projects use NAME
 
-Projects are locally authorized profiles backed by project-scoped read keys.`)
+Projects are local profiles backed by separately authorized, project-scoped
+read keys. Run updog login again to authorize another project.`)
 }
 
 func (a *app) printLogsHelp() {

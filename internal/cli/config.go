@@ -26,6 +26,9 @@ type configFile struct {
 type project struct {
 	URL          string `json:"url"`
 	CredentialID string `json:"credential_id"`
+	ProjectID    int64  `json:"project_id,omitempty"`
+	ProjectName  string `json:"project_name,omitempty"`
+	ProjectSlug  string `json:"project_slug,omitempty"`
 }
 
 func defaultConfigPath() (string, error) {
