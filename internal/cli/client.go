@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -44,11 +45,37 @@ func (c apiClient) get(ctx context.Context, path string, query url.Values) ([]by
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
+	return c.do(req)
+}
+
+func (c apiClient) postJSON(ctx context.Context, path string, value any) ([]byte, error) {
+	body, err := json.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("encode request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return c.do(req)
+}
+
+func (c apiClient) do(req *http.Request) ([]byte, error) {
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("X-API-Key", c.apiKey)
+	if c.apiKey != "" {
+		req.Header.Set("X-API-Key", c.apiKey)
+	}
 	req.Header.Set("User-Agent", "updog/"+c.version)
 
-	resp, err := c.httpClient.Do(req)
+	// API redirects are unexpected, and following a 307/308 could forward a
+	// device code or API key to another origin. Use a shallow client copy so a
+	// caller-supplied client keeps its transport and timeout without mutating it.
+	httpClient := *c.httpClient
+	httpClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request Updog: %w", err)
 	}
@@ -86,9 +113,20 @@ func normalizeBaseURL(value string) (string, error) {
 	if parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return "", errors.New("Updog URL must contain only a scheme, host, optional port, and path")
 	}
+	if parsed.Scheme == "http" && !loopbackHost(parsed.Hostname()) {
+		return "", errors.New("Updog URL must use HTTPS unless the host is loopback")
+	}
 	parsed.Path = strings.TrimRight(parsed.Path, "/")
 	parsed.RawPath = ""
 	return strings.TrimRight(parsed.String(), "/"), nil
+}
+
+func loopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func validateAPIKey(value string) (string, error) {
