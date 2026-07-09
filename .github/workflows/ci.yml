@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check shell syntax
+        run: sh -n updog test/run.sh test/fixtures/bin/curl
+      - name: Check executable files
+        run: test -x updog && test -x test/run.sh && test -x test/fixtures/bin/curl
+      - name: Run tests
+        run: sh test/run.sh

@@ -1,0 +1,547 @@
+#!/bin/sh
+
+VERSION=0.1.0
+DEFAULT_UPDOG_URL=https://wuzupdog.com
+
+print_help() {
+  cat <<'EOF'
+updog - search Updog logs and errors
+
+Usage:
+  updog logs search [options]
+  updog errors search [options]
+  updog errors show ID [options]
+  updog help
+  updog version
+
+Commands:
+  logs search      Search project logs
+  errors search    Search project error groups
+  errors show ID   Show an error group and its occurrences
+
+Environment:
+  UPDOG_API_KEY    Required read-only Updog API key
+  UPDOG_URL        Updog server URL (default: https://wuzupdog.com)
+
+Run "updog COMMAND --help" for command-specific options.
+EOF
+}
+
+print_logs_help() {
+  cat <<'EOF'
+Usage: updog logs search [options]
+
+Options:
+  --query VALUE       Search log messages and metadata
+  --level VALUE       Filter by log level
+  --hostname VALUE    Filter by hostname
+  --trace-id VALUE    Filter by trace ID
+  --since VALUE       Relative duration, RFC3339 timestamp, or "all"
+  --until VALUE       RFC3339 timestamp (default: now)
+  --sort-by VALUE     logged_at, level, hostname, or trace_id
+  --sort-dir VALUE    asc or desc
+  --limit VALUE       Results per page (maximum: 200)
+  --offset VALUE      Result offset (maximum: 10000)
+  -h, --help          Show this help
+EOF
+}
+
+print_errors_search_help() {
+  cat <<'EOF'
+Usage: updog errors search [options]
+
+Options:
+  --query VALUE       Search class, message, and fingerprint
+  --status VALUE      unresolved, resolved, or ignored
+  --since VALUE       Relative duration, RFC3339 timestamp, or "all"
+  --until VALUE       RFC3339 timestamp (default: now)
+  --limit VALUE       Results per page (maximum: 200)
+  --offset VALUE      Result offset (maximum: 10000)
+  -h, --help          Show this help
+EOF
+}
+
+print_errors_show_help() {
+  cat <<'EOF'
+Usage: updog errors show ID [options]
+
+Options:
+  --since VALUE       Relative duration, RFC3339 timestamp, or "all"
+  --until VALUE       RFC3339 timestamp (default: now)
+  --limit VALUE       Occurrences per page (maximum: 100)
+  --offset VALUE      Occurrence offset (maximum: 10000)
+  -h, --help          Show this help
+EOF
+}
+
+usage_error() {
+  printf 'updog: %s\n' "$1" >&2
+  printf 'Try "updog help" for usage.\n' >&2
+  exit 2
+}
+
+config_error() {
+  printf 'updog: %s\n' "$1" >&2
+  exit 2
+}
+
+require_value() {
+  if [ "$2" -lt 2 ]; then
+    usage_error "option $1 requires a value"
+  fi
+}
+
+api_get() {
+  api_path=$1
+  shift
+
+  api_key=${UPDOG_API_KEY-}
+  if [ -z "$api_key" ]; then
+    config_error "UPDOG_API_KEY is required"
+  fi
+
+  # Updog keys are URL-safe high-entropy tokens. Restricting the value to this
+  # alphabet also prevents a malformed environment value from injecting extra
+  # directives into the curl configuration supplied on stdin.
+  case "$api_key" in
+    *[!A-Za-z0-9._~-]*)
+      config_error "UPDOG_API_KEY contains invalid characters"
+      ;;
+  esac
+
+  if ! command -v curl >/dev/null 2>&1; then
+    config_error "curl is required but was not found"
+  fi
+
+  api_base_url=${UPDOG_URL:-$DEFAULT_UPDOG_URL}
+  while [ "${api_base_url%/}" != "$api_base_url" ]; do
+    api_base_url=${api_base_url%/}
+  done
+
+  case "$api_base_url" in
+    http://* | https://*) ;;
+    *) config_error "UPDOG_URL must begin with http:// or https://" ;;
+  esac
+
+  api_response=$(
+    printf 'header = "x-api-key: %s"\nheader = "accept: application/json"\n' "$api_key" |
+      curl \
+        --config - \
+        --silent \
+        --show-error \
+        --fail-with-body \
+        --get \
+        --url "$api_base_url$api_path" \
+        "$@"
+  )
+  api_status=$?
+
+  if [ "$api_status" -ne 0 ]; then
+    if [ -n "$api_response" ]; then
+      printf '%s\n' "$api_response" >&2
+    fi
+    exit 1
+  fi
+
+  printf '%s\n' "$api_response"
+}
+
+logs_search() {
+  logs_query_set=0
+  logs_level_set=0
+  logs_hostname_set=0
+  logs_trace_id_set=0
+  logs_since_set=0
+  logs_until_set=0
+  logs_sort_by_set=0
+  logs_sort_dir_set=0
+  logs_limit_set=0
+  logs_offset_set=0
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -h | --help)
+        print_logs_help
+        exit 0
+        ;;
+      --query)
+        require_value "$1" "$#"
+        logs_query=$2
+        logs_query_set=1
+        shift 2
+        ;;
+      --query=*)
+        logs_query=${1#*=}
+        logs_query_set=1
+        shift
+        ;;
+      --level)
+        require_value "$1" "$#"
+        logs_level=$2
+        logs_level_set=1
+        shift 2
+        ;;
+      --level=*)
+        logs_level=${1#*=}
+        logs_level_set=1
+        shift
+        ;;
+      --hostname)
+        require_value "$1" "$#"
+        logs_hostname=$2
+        logs_hostname_set=1
+        shift 2
+        ;;
+      --hostname=*)
+        logs_hostname=${1#*=}
+        logs_hostname_set=1
+        shift
+        ;;
+      --trace-id)
+        require_value "$1" "$#"
+        logs_trace_id=$2
+        logs_trace_id_set=1
+        shift 2
+        ;;
+      --trace-id=*)
+        logs_trace_id=${1#*=}
+        logs_trace_id_set=1
+        shift
+        ;;
+      --since)
+        require_value "$1" "$#"
+        logs_since=$2
+        logs_since_set=1
+        shift 2
+        ;;
+      --since=*)
+        logs_since=${1#*=}
+        logs_since_set=1
+        shift
+        ;;
+      --until)
+        require_value "$1" "$#"
+        logs_until=$2
+        logs_until_set=1
+        shift 2
+        ;;
+      --until=*)
+        logs_until=${1#*=}
+        logs_until_set=1
+        shift
+        ;;
+      --sort-by)
+        require_value "$1" "$#"
+        logs_sort_by=$2
+        logs_sort_by_set=1
+        shift 2
+        ;;
+      --sort-by=*)
+        logs_sort_by=${1#*=}
+        logs_sort_by_set=1
+        shift
+        ;;
+      --sort-dir)
+        require_value "$1" "$#"
+        logs_sort_dir=$2
+        logs_sort_dir_set=1
+        shift 2
+        ;;
+      --sort-dir=*)
+        logs_sort_dir=${1#*=}
+        logs_sort_dir_set=1
+        shift
+        ;;
+      --limit)
+        require_value "$1" "$#"
+        logs_limit=$2
+        logs_limit_set=1
+        shift 2
+        ;;
+      --limit=*)
+        logs_limit=${1#*=}
+        logs_limit_set=1
+        shift
+        ;;
+      --offset)
+        require_value "$1" "$#"
+        logs_offset=$2
+        logs_offset_set=1
+        shift 2
+        ;;
+      --offset=*)
+        logs_offset=${1#*=}
+        logs_offset_set=1
+        shift
+        ;;
+      --)
+        shift
+        if [ "$#" -gt 0 ]; then
+          usage_error "unexpected argument: $1"
+        fi
+        ;;
+      -*) usage_error "unknown logs search option: $1" ;;
+      *) usage_error "unexpected argument for logs search: $1" ;;
+    esac
+  done
+
+  set --
+  [ "$logs_query_set" -eq 0 ] || set -- "$@" --data-urlencode "q=$logs_query"
+  [ "$logs_level_set" -eq 0 ] || set -- "$@" --data-urlencode "level=$logs_level"
+  [ "$logs_hostname_set" -eq 0 ] || set -- "$@" --data-urlencode "hostname=$logs_hostname"
+  [ "$logs_trace_id_set" -eq 0 ] || set -- "$@" --data-urlencode "trace_id=$logs_trace_id"
+  [ "$logs_since_set" -eq 0 ] || set -- "$@" --data-urlencode "since=$logs_since"
+  [ "$logs_until_set" -eq 0 ] || set -- "$@" --data-urlencode "until=$logs_until"
+  [ "$logs_sort_by_set" -eq 0 ] || set -- "$@" --data-urlencode "sort_by=$logs_sort_by"
+  [ "$logs_sort_dir_set" -eq 0 ] || set -- "$@" --data-urlencode "sort_dir=$logs_sort_dir"
+  [ "$logs_limit_set" -eq 0 ] || set -- "$@" --data-urlencode "limit=$logs_limit"
+  [ "$logs_offset_set" -eq 0 ] || set -- "$@" --data-urlencode "offset=$logs_offset"
+
+  api_get /api/v1/logs "$@"
+}
+
+errors_search() {
+  errors_query_set=0
+  errors_status_set=0
+  errors_since_set=0
+  errors_until_set=0
+  errors_limit_set=0
+  errors_offset_set=0
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -h | --help)
+        print_errors_search_help
+        exit 0
+        ;;
+      --query)
+        require_value "$1" "$#"
+        errors_query=$2
+        errors_query_set=1
+        shift 2
+        ;;
+      --query=*)
+        errors_query=${1#*=}
+        errors_query_set=1
+        shift
+        ;;
+      --status)
+        require_value "$1" "$#"
+        errors_status=$2
+        errors_status_set=1
+        shift 2
+        ;;
+      --status=*)
+        errors_status=${1#*=}
+        errors_status_set=1
+        shift
+        ;;
+      --since)
+        require_value "$1" "$#"
+        errors_since=$2
+        errors_since_set=1
+        shift 2
+        ;;
+      --since=*)
+        errors_since=${1#*=}
+        errors_since_set=1
+        shift
+        ;;
+      --until)
+        require_value "$1" "$#"
+        errors_until=$2
+        errors_until_set=1
+        shift 2
+        ;;
+      --until=*)
+        errors_until=${1#*=}
+        errors_until_set=1
+        shift
+        ;;
+      --limit)
+        require_value "$1" "$#"
+        errors_limit=$2
+        errors_limit_set=1
+        shift 2
+        ;;
+      --limit=*)
+        errors_limit=${1#*=}
+        errors_limit_set=1
+        shift
+        ;;
+      --offset)
+        require_value "$1" "$#"
+        errors_offset=$2
+        errors_offset_set=1
+        shift 2
+        ;;
+      --offset=*)
+        errors_offset=${1#*=}
+        errors_offset_set=1
+        shift
+        ;;
+      --)
+        shift
+        if [ "$#" -gt 0 ]; then
+          usage_error "unexpected argument: $1"
+        fi
+        ;;
+      -*) usage_error "unknown errors search option: $1" ;;
+      *) usage_error "unexpected argument for errors search: $1" ;;
+    esac
+  done
+
+  set --
+  [ "$errors_query_set" -eq 0 ] || set -- "$@" --data-urlencode "q=$errors_query"
+  [ "$errors_status_set" -eq 0 ] || set -- "$@" --data-urlencode "status=$errors_status"
+  [ "$errors_since_set" -eq 0 ] || set -- "$@" --data-urlencode "since=$errors_since"
+  [ "$errors_until_set" -eq 0 ] || set -- "$@" --data-urlencode "until=$errors_until"
+  [ "$errors_limit_set" -eq 0 ] || set -- "$@" --data-urlencode "limit=$errors_limit"
+  [ "$errors_offset_set" -eq 0 ] || set -- "$@" --data-urlencode "offset=$errors_offset"
+
+  api_get /api/v1/errors "$@"
+}
+
+errors_show() {
+  if [ "$#" -eq 0 ]; then
+    usage_error "errors show requires an error ID"
+  fi
+
+  case "$1" in
+    -h | --help)
+      print_errors_show_help
+      exit 0
+      ;;
+  esac
+
+  error_id=$1
+  shift
+
+  case "$error_id" in
+    '' | *[!0-9]*) usage_error "error ID must be a positive integer: $error_id" ;;
+  esac
+
+  positive_id=$error_id
+  while [ "${positive_id#0}" != "$positive_id" ]; do
+    positive_id=${positive_id#0}
+  done
+  if [ -z "$positive_id" ]; then
+    usage_error "error ID must be a positive integer: $error_id"
+  fi
+
+  show_since_set=0
+  show_until_set=0
+  show_limit_set=0
+  show_offset_set=0
+
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -h | --help)
+        print_errors_show_help
+        exit 0
+        ;;
+      --since)
+        require_value "$1" "$#"
+        show_since=$2
+        show_since_set=1
+        shift 2
+        ;;
+      --since=*)
+        show_since=${1#*=}
+        show_since_set=1
+        shift
+        ;;
+      --until)
+        require_value "$1" "$#"
+        show_until=$2
+        show_until_set=1
+        shift 2
+        ;;
+      --until=*)
+        show_until=${1#*=}
+        show_until_set=1
+        shift
+        ;;
+      --limit)
+        require_value "$1" "$#"
+        show_limit=$2
+        show_limit_set=1
+        shift 2
+        ;;
+      --limit=*)
+        show_limit=${1#*=}
+        show_limit_set=1
+        shift
+        ;;
+      --offset)
+        require_value "$1" "$#"
+        show_offset=$2
+        show_offset_set=1
+        shift 2
+        ;;
+      --offset=*)
+        show_offset=${1#*=}
+        show_offset_set=1
+        shift
+        ;;
+      --)
+        shift
+        if [ "$#" -gt 0 ]; then
+          usage_error "unexpected argument: $1"
+        fi
+        ;;
+      -*) usage_error "unknown errors show option: $1" ;;
+      *) usage_error "unexpected argument for errors show: $1" ;;
+    esac
+  done
+
+  set --
+  [ "$show_since_set" -eq 0 ] || set -- "$@" --data-urlencode "since=$show_since"
+  [ "$show_until_set" -eq 0 ] || set -- "$@" --data-urlencode "until=$show_until"
+  [ "$show_limit_set" -eq 0 ] || set -- "$@" --data-urlencode "limit=$show_limit"
+  [ "$show_offset_set" -eq 0 ] || set -- "$@" --data-urlencode "offset=$show_offset"
+
+  api_get "/api/v1/errors/$error_id" "$@"
+}
+
+case "${1-}" in
+  '' | -h | --help | help)
+    print_help
+    ;;
+  -V | --version | version)
+    printf 'updog %s\n' "$VERSION"
+    ;;
+  logs)
+    shift
+    case "${1-}" in
+      search)
+        shift
+        logs_search "$@"
+        ;;
+      -h | --help | help) print_logs_help ;;
+      '') usage_error "logs requires the search command" ;;
+      *) usage_error "unknown logs command: $1" ;;
+    esac
+    ;;
+  errors)
+    shift
+    case "${1-}" in
+      search)
+        shift
+        errors_search "$@"
+        ;;
+      show)
+        shift
+        errors_show "$@"
+        ;;
+      -h | --help | help)
+        print_errors_search_help
+        printf '\n'
+        print_errors_show_help
+        ;;
+      '') usage_error "errors requires the search or show command" ;;
+      *) usage_error "unknown errors command: $1" ;;
+    esac
+    ;;
+  *) usage_error "unknown command: $1" ;;
+esac
