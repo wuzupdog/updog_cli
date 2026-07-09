@@ -25,7 +25,7 @@ updog version
 
 ## Configure
 
-Create a **Read-only agent** key on the Updog project page. The secret is shown
+Create a **Read-only** key on the Updog project page. The secret is shown
 once, so place it in your agent or shell environment when you need it:
 
 ```sh
@@ -82,7 +82,7 @@ windows are validated by the Updog API.
   key option and the CLI never writes the key to disk.
 - The key header is passed to `curl` with a configuration on stdin, so the
   secret does not appear in `curl`'s process arguments.
-- Use a read-only agent key, rotate or revoke it when exposure is suspected, and
+- Use a read-only key, rotate or revoke it when exposure is suspected, and
   point `UPDOG_URL` only at a server you trust. Read access includes the full
   telemetry stored for the project.
 - Environment variables can be inherited by child processes and may be visible
