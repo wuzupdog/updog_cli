@@ -12,23 +12,22 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Verify version and tests
-        run: |
-          sh -n updog test/run.sh test/fixtures/bin/curl
-          sh test/run.sh
-          version=$(./updog version)
-          version=${version#updog }
-          test "$GITHUB_REF_NAME" = "v$version"
-      - name: Build checksum
-        run: sha256sum updog > SHA256SUMS
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test
+        run: go test ./...
+      - name: Build release archives
+        shell: bash
+        run: ./scripts/build-release.sh "$GITHUB_REF_NAME"
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
           gh release create "$GITHUB_REF_NAME"
-          updog
-          SHA256SUMS
+          dist/*
           --verify-tag
           --generate-notes
           --title "Updog CLI $GITHUB_REF_NAME"
