@@ -427,6 +427,9 @@ func TestLogoutDeletesCredentialAndProfile(t *testing.T) {
 func TestAPIFailureWritesBodyToStderr(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Retry-After", "30")
+		writer.Header().Set("RateLimit-Limit", "60")
+		writer.Header().Set("RateLimit-Remaining", "0")
+		writer.Header().Set("RateLimit-Reset", "1784491234")
 		writer.WriteHeader(http.StatusTooManyRequests)
 		io.WriteString(writer, `{"error":{"code":"rate_limited","message":"slow down"}}`)
 	}))
@@ -439,7 +442,11 @@ func TestAPIFailureWritesBodyToStderr(t *testing.T) {
 	if result.status != 1 || result.stdout != "" {
 		t.Fatalf("status=%d stdout=%q", result.status, result.stdout)
 	}
-	if !strings.Contains(result.stderr, `"code":"rate_limited"`) || !strings.Contains(result.stderr, "Retry-After: 30") {
+	if !strings.Contains(result.stderr, `"code":"rate_limited"`) ||
+		!strings.Contains(result.stderr, "Retry-After: 30") ||
+		!strings.Contains(result.stderr, "RateLimit-Limit: 60") ||
+		!strings.Contains(result.stderr, "RateLimit-Remaining: 0") ||
+		!strings.Contains(result.stderr, "RateLimit-Reset: 1784491234") {
 		t.Fatalf("unexpected stderr: %s", result.stderr)
 	}
 }

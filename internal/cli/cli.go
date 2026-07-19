@@ -68,10 +68,13 @@ type globalOptions struct {
 }
 
 type commandError struct {
-	code       int
-	message    string
-	body       []byte
-	retryAfter string
+	code               int
+	message            string
+	body               []byte
+	retryAfter         string
+	rateLimitLimit     string
+	rateLimitRemaining string
+	rateLimitReset     string
 }
 
 func (e *commandError) Error() string { return e.message }
@@ -234,6 +237,15 @@ func (a *app) finish(err error) int {
 	}
 	if commandErr.retryAfter != "" {
 		fmt.Fprintf(a.err, "Retry-After: %s\n", commandErr.retryAfter)
+	}
+	if commandErr.rateLimitLimit != "" {
+		fmt.Fprintf(a.err, "RateLimit-Limit: %s\n", commandErr.rateLimitLimit)
+	}
+	if commandErr.rateLimitRemaining != "" {
+		fmt.Fprintf(a.err, "RateLimit-Remaining: %s\n", commandErr.rateLimitRemaining)
+	}
+	if commandErr.rateLimitReset != "" {
+		fmt.Fprintf(a.err, "RateLimit-Reset: %s\n", commandErr.rateLimitReset)
 	}
 	if commandErr.code == 2 {
 		fmt.Fprintln(a.err, `Try "updog help" for usage.`)
@@ -778,7 +790,15 @@ func (a *app) getAndRender(globals globalOptions, path string, query url.Values,
 func (a *app) apiCommandError(prefix string, err error) error {
 	var responseErr *apiError
 	if errors.As(err, &responseErr) {
-		return &commandError{code: 1, message: responseErr.Error(), body: responseErr.Body, retryAfter: responseErr.RetryAfter}
+		return &commandError{
+			code:               1,
+			message:            responseErr.Error(),
+			body:               responseErr.Body,
+			retryAfter:         responseErr.RetryAfter,
+			rateLimitLimit:     responseErr.RateLimitLimit,
+			rateLimitRemaining: responseErr.RateLimitRemaining,
+			rateLimitReset:     responseErr.RateLimitReset,
+		}
 	}
 	return &commandError{code: 1, message: prefix + ": " + err.Error()}
 }

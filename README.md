@@ -13,7 +13,7 @@ it against `SHA256SUMS`, and place `updog` somewhere on your `PATH`.
 For Apple silicon:
 
 ```sh
-version=v0.3.0
+version=v0.4.0
 archive="updog_${version#v}_darwin_arm64.tar.gz"
 curl -fsSLO "https://github.com/wuzupdog/updog_cli/releases/download/$version/$archive"
 curl -fsSLO "https://github.com/wuzupdog/updog_cli/releases/download/$version/SHA256SUMS"
@@ -26,7 +26,7 @@ The releases include macOS and Linux binaries for amd64/arm64 and Windows
 binaries for amd64/arm64. Developers with Go installed can instead run:
 
 ```sh
-go install github.com/wuzupdog/updog_cli/cmd/updog@v0.3.0
+go install github.com/wuzupdog/updog_cli/cmd/updog@v0.4.0
 ```
 
 Confirm the installation:
@@ -112,6 +112,7 @@ and `--offset`. `errors show` supports the time and pagination options.
 - `--json` forces JSON even in a terminal.
 - API and network errors go to stderr and exit `1`.
 - Usage and local configuration errors exit `2`.
+- Rate-limited responses print `Retry-After` plus the server's shared `RateLimit-Limit`, `RateLimit-Remaining`, and `RateLimit-Reset` values to stderr.
 
 This makes agent calls predictable:
 
@@ -181,7 +182,7 @@ go build ./cmd/updog
 Build all release archives locally:
 
 ```sh
-./scripts/build-release.sh v0.3.0
+./scripts/build-release.sh v0.4.0
 ```
 
 ## License
