@@ -26,9 +26,12 @@ type apiClient struct {
 }
 
 type apiError struct {
-	StatusCode int
-	Body       []byte
-	RetryAfter string
+	StatusCode         int
+	Body               []byte
+	RetryAfter         string
+	RateLimitLimit     string
+	RateLimitRemaining string
+	RateLimitReset     string
 }
 
 func (e *apiError) Error() string {
@@ -90,9 +93,12 @@ func (c apiClient) do(req *http.Request) ([]byte, error) {
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, &apiError{
-			StatusCode: resp.StatusCode,
-			Body:       body,
-			RetryAfter: resp.Header.Get("Retry-After"),
+			StatusCode:         resp.StatusCode,
+			Body:               body,
+			RetryAfter:         resp.Header.Get("Retry-After"),
+			RateLimitLimit:     resp.Header.Get("RateLimit-Limit"),
+			RateLimitRemaining: resp.Header.Get("RateLimit-Remaining"),
+			RateLimitReset:     resp.Header.Get("RateLimit-Reset"),
 		}
 	}
 	return body, nil
