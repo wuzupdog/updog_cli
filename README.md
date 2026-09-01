@@ -1,6 +1,6 @@
 # Updog CLI
 
-A read-only CLI for searching [Updog](https://wuzupdog.com) logs and errors.
+A read-only CLI for inspecting [Updog](https://wuzupdog.com) hosts and searching logs and errors.
 It is designed for humans and coding agents: terminals get readable tables,
 while redirected output is compact JSON.
 
@@ -13,7 +13,7 @@ it against `SHA256SUMS`, and place `updog` somewhere on your `PATH`.
 For Apple silicon:
 
 ```sh
-version=v0.4.0
+version=v0.5.0
 archive="updog_${version#v}_darwin_arm64.tar.gz"
 curl -fsSLO "https://github.com/wuzupdog/updog_cli/releases/download/$version/$archive"
 curl -fsSLO "https://github.com/wuzupdog/updog_cli/releases/download/$version/SHA256SUMS"
@@ -26,7 +26,7 @@ The releases include macOS and Linux binaries for amd64/arm64 and Windows
 binaries for amd64/arm64. Developers with Go installed can instead run:
 
 ```sh
-go install github.com/wuzupdog/updog_cli/cmd/updog@v0.4.0
+go install github.com/wuzupdog/updog_cli/cmd/updog@v0.5.0
 ```
 
 Confirm the installation:
@@ -44,7 +44,7 @@ updog login
 ```
 
 The CLI prints an Updog URL and a short code. Open the URL, sign in, enter the
-code, choose one project, and approve read-only access to its logs and errors.
+code, choose one project, and approve read-only access to its hosts, logs, and errors.
 The CLI waits for approval, receives a project-scoped key, and stores it in the
 operating system credential store. The configuration file contains only safe
 project metadata and a credential reference. Nothing needs to be added to
@@ -90,6 +90,8 @@ The current project is used by default:
 updog logs search --query 'checkout failed' --level error --since 30m
 updog errors search --status unresolved --since 7d
 updog errors show 42 --since 24h --limit 50
+updog hosts list
+updog hosts show zone-1
 ```
 
 Select a project explicitly when an agent should not depend on local default
@@ -98,12 +100,17 @@ state:
 ```sh
 updog --project mnm logs search --hostname worker-1 --limit 100
 updog --project mnm errors search --query ArgumentError
+updog --project mnm hosts show worker-1
 ```
 
 `logs search` supports `--query`, `--level`, `--hostname`, `--trace-id`,
 `--since`, `--until`, `--sort-by`, `--sort-dir`, `--limit`, and `--offset`.
 `errors search` supports `--query`, `--status`, `--since`, `--until`, `--limit`,
 and `--offset`. `errors show` supports the time and pagination options.
+`hosts list` returns every machine discovered during the last 30 days, with
+measurements sampled from the last ten minutes. `hosts show HOSTNAME` displays
+the full snapshot for one machine, including its current top processes by CPU
+and memory.
 
 ### Output
 
@@ -153,6 +160,7 @@ not credentials, to `AGENTS.md`:
 ```md
 Use `updog --project mnm logs search` and
 `updog --project mnm errors search` when diagnosing production problems.
+Use `updog --project mnm hosts list` for current Linux host health.
 Updog access is read-only. Run these commands on the host.
 ```
 
@@ -160,7 +168,7 @@ Updog access is read-only. Run these commands on the host.
 
 - Interactive credentials are stored through the operating system credential
   manager (macOS Keychain, Windows Credential Manager, or Linux Secret Service).
-- Device login grants only `logs:read` and `errors:read` for the single project
+- Device login grants only `hosts:read`, `logs:read`, and `errors:read` for the single project
   selected during browser approval.
 - Project metadata is stored in the user configuration directory with mode
   `0600` on Unix systems and never contains the API key.
@@ -182,7 +190,7 @@ go build ./cmd/updog
 Build all release archives locally:
 
 ```sh
-./scripts/build-release.sh v0.4.0
+./scripts/build-release.sh v0.5.0
 ```
 
 ## License

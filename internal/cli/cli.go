@@ -212,6 +212,8 @@ func (a *app) run() int {
 		commandErr = a.auth(globals, args[1:])
 	case "projects":
 		commandErr = a.projects(globals, args[1:])
+	case "hosts":
+		commandErr = a.hosts(globals, args[1:])
 	case "logs":
 		commandErr = a.logs(globals, args[1:])
 	case "errors":
@@ -634,6 +636,52 @@ func (a *app) logs(globals globalOptions, args []string) error {
 	return a.getAndRender(globals, "/api/v1/logs", values, "logs")
 }
 
+func (a *app) hosts(globals globalOptions, args []string) error {
+	if len(args) == 0 || args[0] == "list" {
+		if len(args) > 0 {
+			args = args[1:]
+		}
+		return a.hostsList(globals, args)
+	}
+	if args[0] == "show" {
+		return a.hostShow(globals, args[1:])
+	}
+	if args[0] == "-h" || args[0] == "--help" {
+		a.printHostsHelp()
+		return nil
+	}
+	return usageError("unknown hosts command: " + args[0])
+}
+
+func (a *app) hostsList(globals globalOptions, args []string) error {
+	if hasHelp(args) {
+		a.printHostsListHelp()
+		return nil
+	}
+	if len(args) != 0 {
+		return usageError("hosts list does not accept positional arguments")
+	}
+	return a.getAndRender(globals, "/api/v1/hosts", nil, "hosts")
+}
+
+func (a *app) hostShow(globals globalOptions, args []string) error {
+	if hasHelp(args) {
+		a.printHostsShowHelp()
+		return nil
+	}
+	if len(args) == 0 {
+		return usageError("hosts show requires a hostname")
+	}
+	if len(args) != 1 {
+		return usageError("hosts show accepts one hostname")
+	}
+	hostname := strings.TrimSpace(args[0])
+	if hostname == "" {
+		return usageError("hostname must not be empty")
+	}
+	return a.getAndRender(globals, "/api/v1/hosts", url.Values{"hostname": {hostname}}, "host")
+}
+
 func (a *app) errors(globals globalOptions, args []string) error {
 	if len(args) == 0 || args[0] == "search" {
 		if len(args) > 0 {
@@ -876,13 +924,15 @@ func visitedValues(fs *flag.FlagSet, mappings map[string]queryValue) url.Values 
 }
 
 func (a *app) printHelp() {
-	fmt.Fprintln(a.out, `updog - search Updog logs and errors
+	fmt.Fprintln(a.out, `updog - inspect Updog hosts, logs, and errors
 
 Usage:
   updog login [--project NAME] [--url URL]
   updog logout [--project NAME]
   updog projects list
   updog projects use NAME
+  updog [--project NAME] hosts list
+  updog [--project NAME] hosts show HOSTNAME
   updog [--project NAME] logs search [options]
   updog [--project NAME] errors search [options]
   updog [--project NAME] errors show ID [options]
@@ -908,7 +958,7 @@ func (a *app) printLoginHelp() {
        updog login --token-stdin --project NAME [--url URL]
 
 The default flow displays a URL and short code. Sign in through the browser,
-choose one project, and approve read-only logs and errors access. The CLI then
+choose one project, and approve read-only hosts, logs, and errors access. The CLI then
 stores the issued key in the operating system keyring.
 
 --project sets a local alias; otherwise the server project slug is used.
@@ -940,6 +990,26 @@ Options:
   --sort-dir VALUE    asc or desc
   --limit VALUE       Results per page (maximum 200)
   --offset VALUE      Result offset (maximum 10000)`)
+}
+
+func (a *app) printHostsHelp() {
+	fmt.Fprintln(a.out, `Usage:
+  updog [--project NAME] hosts list
+  updog [--project NAME] hosts show HOSTNAME`)
+}
+
+func (a *app) printHostsListHelp() {
+	fmt.Fprintln(a.out, `Usage: updog [--project NAME] hosts list
+
+Lists host snapshots discovered from Updog Agent metrics during the last 30 days.
+Snapshot measurements use samples from the last ten minutes.`)
+}
+
+func (a *app) printHostsShowHelp() {
+	fmt.Fprintln(a.out, `Usage: updog [--project NAME] hosts show HOSTNAME
+
+Shows CPU, load, memory, swap, filesystem, disk, network, file descriptor,
+and current top-process data for one exact hostname.`)
 }
 
 func (a *app) printErrorsHelp() {

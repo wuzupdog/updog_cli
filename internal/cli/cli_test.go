@@ -230,6 +230,75 @@ func TestLogsUseSelectedProjectAndEncodeFilters(t *testing.T) {
 	}
 }
 
+func TestHostsListUsesProjectScopedEndpointAndPreservesJSON(t *testing.T) {
+	const body = `{"data":[{"hostname":"zone-1","service":"zone-host","environment":"production","last_seen_at":"2026-09-01T12:00:00Z","cpu_percent":31.5,"memory":{"total":17179869184,"used":10737418240,"utilization":62.5},"load":{"one":0.5,"five":0.4,"fifteen":0.3},"filesystems":[],"disks":[],"interfaces":[],"processes":[]}],"meta":{"total":1}}`
+	var received *http.Request
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		received = request.Clone(request.Context())
+		writer.Header().Set("Content-Type", "application/json")
+		io.WriteString(writer, body)
+	}))
+	defer server.Close()
+
+	result := runTestCLI(t, filepath.Join(t.TempDir(), "config.json"), newMemorySecrets(), map[string]string{
+		"UPDOG_API_KEY": "updog_host_key",
+		"UPDOG_URL":     server.URL,
+	}, "", false, "hosts", "list")
+
+	if result.status != 0 || received == nil {
+		t.Fatalf("hosts list: status=%d stdout=%s stderr=%s", result.status, result.stdout, result.stderr)
+	}
+	if received.URL.Path != "/api/v1/hosts" || received.URL.RawQuery != "" {
+		t.Fatalf("request URL = %s", received.URL.String())
+	}
+	if strings.TrimSpace(result.stdout) != body {
+		t.Fatalf("JSON output changed: %s", result.stdout)
+	}
+}
+
+func TestHostShowEncodesHostnameAndRendersFullSnapshot(t *testing.T) {
+	var received *http.Request
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		received = request.Clone(request.Context())
+		writer.Header().Set("Content-Type", "application/json")
+		io.WriteString(writer, `{"data":[{"hostname":"zone 1/primary","service":"zone-host","environment":"production","agent_version":"0.2.1","last_seen_at":"2026-09-01T12:00:00Z","uptime_seconds":183900,"logical_cpu_count":8,"cpu_percent":31.5,"cpu_iowait_percent":1.25,"load":{"one":0.5,"five":0.4,"fifteen":0.3},"memory":{"total":17179869184,"used":10737418240,"available":6442450944,"utilization":62.5},"swap":{"total":2147483648,"used":536870912,"available":1610612736,"utilization":25},"file_descriptors":{"used":200,"max":4096},"disk_io_percent":12.5,"network":{"receive_bytes_per_second":1048576,"transmit_bytes_per_second":524288},"filesystems":[{"mountpoint":"/","device":"/dev/sda1","filesystem_type":"ext4","total":107374182400,"used":53687091200,"available":53687091200,"utilization":50}],"disks":[{"device":"sda","read_bytes_per_second":1024,"write_bytes_per_second":2048,"io_utilization":12.5}],"interfaces":[{"interface":"eth0","receive_bytes_per_second":1048576,"transmit_bytes_per_second":524288,"receive_utilization":2,"transmit_utilization":1,"receive_errors_per_second":0,"transmit_errors_per_second":0,"receive_dropped_per_second":0,"transmit_dropped_per_second":0}],"processes":[{"process":"zone","pid":"42","cpu_percent":12,"memory_rss":268435456,"open_file_descriptors":128}]}],"meta":{"total":1}}`)
+	}))
+	defer server.Close()
+
+	result := runTestCLI(t, filepath.Join(t.TempDir(), "config.json"), newMemorySecrets(), map[string]string{
+		"UPDOG_API_KEY": "updog_host_key",
+		"UPDOG_URL":     server.URL,
+	}, "", true, "hosts", "show", "zone 1/primary")
+
+	if result.status != 0 || received == nil {
+		t.Fatalf("host show: status=%d stdout=%s stderr=%s", result.status, result.stdout, result.stderr)
+	}
+	if received.URL.Path != "/api/v1/hosts" || received.URL.Query().Get("hostname") != "zone 1/primary" {
+		t.Fatalf("request URL = %s", received.URL.String())
+	}
+	for _, expected := range []string{"zone 1/primary", "CPU: 31.5%", "Memory: 10.0 GiB / 16.0 GiB (62.5%)", "FILESYSTEMS", "/dev/sda1", "DISKS", "INTERFACES", "PROCESSES", "zone", "256.0 MiB"} {
+		if !strings.Contains(result.stdout, expected) {
+			t.Fatalf("output missing %q:\n%s", expected, result.stdout)
+		}
+	}
+}
+
+func TestHostShowReportsMissingHost(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		io.WriteString(writer, `{"data":[],"meta":{"total":0}}`)
+	}))
+	defer server.Close()
+
+	result := runTestCLI(t, filepath.Join(t.TempDir(), "config.json"), newMemorySecrets(), map[string]string{
+		"UPDOG_API_KEY": "updog_host_key",
+		"UPDOG_URL":     server.URL,
+	}, "", false, "hosts", "show", "missing")
+
+	if result.status != 1 || result.stdout != "" || !strings.Contains(result.stderr, "host not found") {
+		t.Fatalf("missing host result = %#v", result)
+	}
+}
+
 func TestEnvironmentKeyWorksWithoutLogin(t *testing.T) {
 	const apiKey = "updog_ci_key"
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
