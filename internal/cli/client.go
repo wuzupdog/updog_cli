@@ -22,6 +22,7 @@ type apiClient struct {
 	baseURL    string
 	apiKey     string
 	version    string
+	projectID  int64
 	httpClient *http.Client
 }
 
@@ -66,6 +67,9 @@ func (c apiClient) postJSON(ctx context.Context, path string, value any) ([]byte
 
 func (c apiClient) do(req *http.Request) ([]byte, error) {
 	req.Header.Set("Accept", "application/json")
+	if c.projectID > 0 {
+		req.Header.Set("X-Updog-Project-ID", fmt.Sprint(c.projectID))
+	}
 	if c.apiKey != "" {
 		req.Header.Set("X-API-Key", c.apiKey)
 	}

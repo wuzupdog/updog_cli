@@ -34,10 +34,11 @@ type deviceAuthorization struct {
 }
 
 type deviceToken struct {
-	AccessToken string        `json:"access_token"`
-	TokenType   string        `json:"token_type"`
-	Scope       string        `json:"scope"`
-	Project     deviceProject `json:"project"`
+	AccessToken string          `json:"access_token"`
+	TokenType   string          `json:"token_type"`
+	Scope       string          `json:"scope"`
+	Project     deviceProject   `json:"project"`
+	Projects    []deviceProject `json:"projects,omitempty"`
 }
 
 type deviceProject struct {
@@ -54,9 +55,10 @@ type deviceOAuthError struct {
 func (a *app) deviceLogin(globals globalOptions, baseURL string) error {
 	client := apiClient{baseURL: baseURL, version: a.version, httpClient: a.httpClient}
 	body, err := client.postJSON(a.context, deviceAuthorizationPath, map[string]any{
-		"client_id":   deviceClientID,
-		"scope":       deviceReadScope,
-		"device_name": a.deviceName,
+		"client_id":         deviceClientID,
+		"scope":             deviceReadScope,
+		"device_name":       a.deviceName,
+		"project_selection": "multiple",
 	})
 	if err != nil {
 		return deviceStartError(err)
@@ -83,6 +85,9 @@ func (a *app) deviceLogin(globals globalOptions, baseURL string) error {
 	projectName := globals.project
 	if projectName == "" {
 		projectName = token.Project.Slug
+		if len(token.Projects) > 1 {
+			projectName = "default"
+		}
 		if validateProjectName(projectName) != nil {
 			projectName = "project-" + strconv.FormatInt(token.Project.ID, 10)
 		}
@@ -92,6 +97,7 @@ func (a *app) deviceLogin(globals globalOptions, baseURL string) error {
 		ProjectID:   token.Project.ID,
 		ProjectName: token.Project.Name,
 		ProjectSlug: token.Project.Slug,
+		Projects:    token.Projects,
 	}
 	return a.persistLogin(globals, projectName, baseURL, token.AccessToken, metadata)
 }
@@ -212,6 +218,14 @@ func validateDeviceToken(token deviceToken) error {
 	}
 	if token.Project.ID <= 0 || unsafeProjectName(token.Project.Name) || validateProjectName(token.Project.Slug) != nil {
 		return errors.New("invalid project")
+	}
+	if token.Projects != nil {
+		if err := validateGrantedProjects(token.Projects); err != nil {
+			return err
+		}
+		if token.Projects[0] != token.Project {
+			return errors.New("primary project does not match project grants")
+		}
 	}
 	return nil
 }
