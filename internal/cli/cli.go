@@ -373,11 +373,18 @@ func (a *app) manualLogin(globals globalOptions, normalizedURL string, tokenStdi
 	}
 
 	client := apiClient{baseURL: normalizedURL, apiKey: apiKey, version: a.version, httpClient: a.httpClient}
+	metadata := project{}
 	if _, err := client.get(a.context, "/api/v1/logs", url.Values{"limit": {"1"}}); err != nil {
-		return a.apiCommandError("login validation failed", err)
+		if !projectSelectionRequired(err) {
+			return a.apiCommandError("login validation failed", err)
+		}
+		projects, err := a.discoverProjects(resolvedAuth{baseURL: normalizedURL, apiKey: apiKey})
+		if err != nil {
+			return err
+		}
+		metadata = project{Projects: projects, ProjectID: projects[0].ID, ProjectName: projects[0].Name, ProjectSlug: projects[0].Slug}
 	}
-
-	return a.persistLogin(globals, projectName, normalizedURL, apiKey, project{})
+	return a.persistLogin(globals, projectName, normalizedURL, apiKey, metadata)
 }
 
 func (a *app) persistLogin(globals globalOptions, projectName, normalizedURL, apiKey string, metadata project) error {
@@ -418,6 +425,9 @@ func (a *app) persistLogin(globals globalOptions, projectName, normalizedURL, ap
 		"url":     normalizedURL,
 		"storage": "os_keyring",
 	}
+	if len(metadata.Projects) > 0 {
+		data["projects"] = metadata.Projects
+	}
 	if metadata.ProjectID > 0 {
 		data["project_id"] = metadata.ProjectID
 	}
@@ -431,7 +441,13 @@ func (a *app) persistLogin(globals globalOptions, projectName, normalizedURL, ap
 	if globals.json || !a.outputIsTerminal() {
 		return writeJSON(a.out, result)
 	}
-	if metadata.ProjectName != "" {
+	if len(metadata.Projects) > 1 {
+		names := make([]string, len(metadata.Projects))
+		for i, granted := range metadata.Projects {
+			names[i] = granted.Name
+		}
+		fmt.Fprintf(a.out, "Logged in to %s as profile %q. Read-only access: %s.\n", normalizedURL, projectName, strings.Join(names, ", "))
+	} else if metadata.ProjectName != "" {
 		fmt.Fprintf(a.out, "Logged in to %s for %s as profile %q.\n", normalizedURL, metadata.ProjectName, projectName)
 	} else {
 		fmt.Fprintf(a.out, "Logged in to %s as project %q.\n", normalizedURL, projectName)
@@ -547,12 +563,13 @@ func (a *app) projectsList(globals globalOptions) error {
 		return configError(err.Error())
 	}
 	type row struct {
-		Name        string `json:"name"`
-		URL         string `json:"url"`
-		Current     bool   `json:"current"`
-		ProjectID   int64  `json:"project_id,omitempty"`
-		ProjectName string `json:"project_name,omitempty"`
-		ProjectSlug string `json:"project_slug,omitempty"`
+		Name        string          `json:"name"`
+		URL         string          `json:"url"`
+		Current     bool            `json:"current"`
+		ProjectID   int64           `json:"project_id,omitempty"`
+		ProjectName string          `json:"project_name,omitempty"`
+		ProjectSlug string          `json:"project_slug,omitempty"`
+		Projects    []deviceProject `json:"projects,omitempty"`
 	}
 	rows := make([]row, 0, len(cfg.Projects))
 	for _, name := range projectNames(cfg) {
@@ -564,6 +581,7 @@ func (a *app) projectsList(globals globalOptions) error {
 			ProjectID:   entry.ProjectID,
 			ProjectName: entry.ProjectName,
 			ProjectSlug: entry.ProjectSlug,
+			Projects:    entry.Projects,
 		})
 	}
 	if globals.json || !a.outputIsTerminal() {
@@ -581,6 +599,13 @@ func (a *app) projectsList(globals globalOptions) error {
 			current = "*"
 		}
 		serverProject := item.ProjectName
+		if len(item.Projects) > 1 {
+			names := make([]string, len(item.Projects))
+			for i, p := range item.Projects {
+				names[i] = p.Name
+			}
+			serverProject = strings.Join(names, ", ")
+		}
 		if serverProject == "" {
 			serverProject = "-"
 		}
@@ -767,10 +792,12 @@ func (a *app) errorShow(globals globalOptions, args []string) error {
 }
 
 type resolvedAuth struct {
-	project string
-	baseURL string
-	apiKey  string
-	source  string
+	project   string
+	baseURL   string
+	apiKey    string
+	source    string
+	projectID int64
+	projects  []deviceProject
 }
 
 func (a *app) resolveAuth(requestedProject string) (resolvedAuth, error) {
@@ -819,7 +846,7 @@ func (a *app) resolveAuth(requestedProject string) (resolvedAuth, error) {
 	if err != nil {
 		return resolvedAuth{}, configError("stored credential is invalid; run updog login again")
 	}
-	return resolvedAuth{project: name, baseURL: baseURL, apiKey: apiKey, source: "os_keyring"}, nil
+	return resolvedAuth{project: name, baseURL: baseURL, apiKey: apiKey, source: "os_keyring", projects: entry.Projects}, nil
 }
 
 func configPersistenceError(primary, rollback error) error {
@@ -830,6 +857,13 @@ func configPersistenceError(primary, rollback error) error {
 }
 
 func (a *app) getAndRender(globals globalOptions, path string, query url.Values, kind string) error {
+	if globals.allProjects && a.getenv("UPDOG_API_KEY") != "" {
+		auth, err := a.resolveAuth("")
+		if err != nil {
+			return err
+		}
+		return a.getCredentialProjectsAndRender(globals, auth, path, query, kind)
+	}
 	if globals.multipleProjects() {
 		return a.getProjectsAndRender(globals, path, query, kind)
 	}
@@ -839,6 +873,9 @@ func (a *app) getAndRender(globals globalOptions, path string, query url.Values,
 	}
 	client := apiClient{baseURL: auth.baseURL, apiKey: auth.apiKey, version: a.version, httpClient: a.httpClient}
 	body, err := client.get(a.context, path, query)
+	if projectSelectionRequired(err) {
+		return a.getCredentialProjectsAndRender(globals, auth, path, query, kind)
+	}
 	if err != nil {
 		return a.apiCommandError("request failed", err)
 	}
@@ -958,7 +995,7 @@ Global options:
   --json          Force compact JSON output
 
 Authentication:
-  Login displays a URL and code for approving one read-only project.
+  Login displays a URL and code for selecting one or more read-only projects.
   The resulting key is stored in the OS keyring.
   UPDOG_API_KEY overrides stored credentials for CI and automation.
   UPDOG_URL changes the server URL for environment-key authentication.
@@ -974,10 +1011,12 @@ func (a *app) printLoginHelp() {
        updog login --token-stdin --project NAME [--url URL]
 
 The default flow displays a URL and short code. Sign in through the browser,
-choose one project, and approve read-only hosts, logs, and errors access. The CLI then
+choose one or more projects, and approve read-only hosts, logs, and errors access. The CLI then
 stores the issued key in the operating system keyring.
 
---project sets a local alias; otherwise the server project slug is used.
+--project only sets a local credential alias; it never determines access.
+Choose projects in the browser. Multiple selections use the "default" alias.
+Plain telemetry commands query all projects granted to that credential.
 --manual prompts for an existing read-only key. --token-stdin reads one key
 from standard input and requires --project. Keys are never accepted as
 command-line values.`)

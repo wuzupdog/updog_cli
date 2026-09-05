@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.0
+
+- Select one or more projects during plain `updog login` and store one credential granting exactly that selection.
+- Automatically discover and query the projects granted to a multi-project key, including imported and environment keys. Keep `--all-projects` for querying all saved profiles or an environment key's grants.
+- Show granted projects in login and profile output; preserve single-project output and older server login compatibility.
+- Requires the additive server project-grant and discovery API deployment before release. Existing tokens remain valid; log in again to issue one key for several projects.
+
 ## 0.6.0
 
 - Query multiple saved profiles with repeated `--project NAME` or `--all-projects` on all telemetry commands.

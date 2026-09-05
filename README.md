@@ -13,7 +13,7 @@ it against `SHA256SUMS`, and place `updog` somewhere on your `PATH`.
 For Apple silicon:
 
 ```sh
-version=v0.6.0
+version=v0.7.0
 archive="updog_${version#v}_darwin_arm64.tar.gz"
 curl -fsSLO "https://github.com/wuzupdog/updog_cli/releases/download/$version/$archive"
 curl -fsSLO "https://github.com/wuzupdog/updog_cli/releases/download/$version/SHA256SUMS"
@@ -26,7 +26,7 @@ The releases include macOS and Linux binaries for amd64/arm64 and Windows
 binaries for amd64/arm64. Developers with Go installed can instead run:
 
 ```sh
-go install github.com/wuzupdog/updog_cli/cmd/updog@v0.6.0
+go install github.com/wuzupdog/updog_cli/cmd/updog@v0.7.0
 ```
 
 Confirm the installation:
@@ -44,16 +44,17 @@ updog login
 ```
 
 The CLI prints an Updog URL and a short code. Open the URL, sign in, enter the
-code, choose one project, and approve read-only access to its hosts, logs, and errors.
-The CLI waits for approval, receives a project-scoped key, and stores it in the
+code, select one or more projects, and approve read-only access to their hosts, logs, and errors.
+The CLI waits for approval, receives one key granting exactly those projects, and stores it in the
 operating system credential store. The configuration file contains only safe
 project metadata and a credential reference. Nothing needs to be added to
 `.bashrc`, `.zshrc`, or the repository.
 
 Only project owners and admins can approve a CLI login for that project.
 
-Use `--project` only when you want a local alias that differs from the Updog
-project slug:
+No project flags are needed at login. A single selection uses the project slug
+as its local profile name; multiple selections use `default`. Optionally,
+`--project` sets a local credential alias and never changes its permissions:
 
 ```sh
 updog login --project mnm-production
@@ -62,16 +63,18 @@ updog login --project mnm-production
 For a self-hosted or local Updog server:
 
 ```sh
-updog login --project mnm --url https://updog.orb.local
+updog login --project mnm --url https://app.updog-devcontainer.orb.local
 ```
 
 HTTPS is required for remote servers. Plain HTTP is accepted only for loopback
 addresses so device codes and API keys are never sent over a network in clear
 text.
 
-Each login authorizes one local project profile because Updog read keys are
-project-scoped. Add another project by running `updog login` again and choosing
-that project in the browser.
+Each login stores one credential profile, which may grant one or more projects.
+To change its access, run `updog login` again and approve the desired projects.
+Older keys still work; reissue a credential to combine projects under one key.
+Server support is required for multi-selection; older servers retain their
+single-project flow.
 
 Manage profiles with:
 
@@ -84,7 +87,8 @@ updog logout --project mnm
 
 ## Search telemetry
 
-The current project is used by default:
+The current credential is used by default. Commands automatically query every
+project granted to that key:
 
 ```sh
 updog logs search --query 'checkout failed' --level error --since 30m
@@ -94,8 +98,8 @@ updog hosts list
 updog hosts show zone-1
 ```
 
-Select a project explicitly when an agent should not depend on local default
-state:
+Select a saved credential profile explicitly when an agent should not depend
+on local default state (a profile can grant multiple projects):
 
 ```sh
 updog --project mnm logs search --hostname worker-1 --limit 100
@@ -105,22 +109,28 @@ updog --project mnm hosts show worker-1
 
 ### Query multiple projects
 
-Requires CLI 0.6.0 or newer. Run `updog login` once per project (or import
-an existing read-only key using `--manual --project NAME`). Each profile keeps
-its own credential. Query selected profiles together or all saved profiles:
+CLI 0.7.0 lets you approve multiple projects with one browser login:
 
 ```sh
-updog --project mnm --project updog logs search --query timeout --since 1h
-updog --all-projects errors search --status unresolved --since 7d
+updog login
+# Select one or more projects in the browser.
+updog logs search --query timeout --since 1h
 updog --all-projects hosts list
 ```
 
-Repeat `--project NAME`; duplicate profile names are queried once. Explicit
-profiles keep the supplied order; `--all-projects` sorts profiles by name.
-These selectors work with all hosts, logs, and errors commands and do not change
-the current profile. Login, logout, and profile management still operate on
-one profile. `--all-projects` cannot be combined with `--project` or
-`UPDOG_API_KEY`; multiple explicit profiles also cannot use `UPDOG_API_KEY`.
+The server's key grants determine access. CLI discovery retrieves the allowed
+projects and sends `X-Updog-Project-ID` for each query. A header or local profile
+cannot add permissions. Project IDs appear alongside project slugs in grouped
+JSON output.
+
+Existing separate profiles still work: repeat `--project NAME` to query selected
+profiles, or use `--all-projects` to query every saved profile and its grants.
+Duplicate profile names are queried once; profiles keep explicit order or are
+sorted by name with `--all-projects`. Granted projects are ordered by server ID.
+These selectors do not change the current profile. Login and logout operate on
+one credential profile. `--all-projects` cannot be combined with `--project`.
+With `UPDOG_API_KEY`, plain queries and `--all-projects` query that key's grants;
+`--project` remains incompatible with environment authentication.
 
 Up to four requests run concurrently using each profile's own server and key.
 Filters, sorting, `--limit`, and `--offset` apply independently to every project;
@@ -146,7 +156,8 @@ response under `response` without changing its fields:
 ```
 
 `--all-projects` always uses this envelope, even with one configured profile.
-Single-profile commands keep their existing output. Failed profiles have an
+Single-project credentials keep their existing output. Credentials with multiple
+projects use this envelope even without flags. Failed profiles have an
 `error` instead of `response`, containing `message`, `exit_code`, and any JSON
 API `body` and rate-limit headers (`retry_after`, `rate_limit_limit`,
 `rate_limit_remaining`, `rate_limit_reset`). Successful results remain available.
@@ -219,13 +230,15 @@ Updog access is read-only. Run these commands on the host.
 
 - Interactive credentials are stored through the operating system credential
   manager (macOS Keychain, Windows Credential Manager, or Linux Secret Service).
-- Device login grants only `hosts:read`, `logs:read`, and `errors:read` for the single project
-  selected during browser approval.
+- Device login grants only `hosts:read`, `logs:read`, and `errors:read` for exactly the projects
+  selected during browser approval (up to 100).
 - Project metadata is stored in the user configuration directory with mode
   `0600` on Unix systems and never contains the API key.
 - CI can provide `UPDOG_API_KEY` without persisting it.
-- Read access returns full telemetry for the authorized project. Revoke or
-  rotate a key if exposure is suspected.
+- Read access returns full telemetry for the authorized projects. The same key
+  appears in each selected project's API Keys section. Revoking it from any
+  selected project revokes the whole credential. Older CLIs continue to receive
+  single-project approvals. Ingestion keys remain single-project.
 
 ## Develop
 
@@ -241,7 +254,7 @@ go build ./cmd/updog
 Build all release archives locally:
 
 ```sh
-./scripts/build-release.sh v0.6.0
+./scripts/build-release.sh v0.7.0
 ```
 
 ## License

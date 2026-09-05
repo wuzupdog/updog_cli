@@ -198,7 +198,7 @@ func TestMultipleProjectSelectionRejectsUnsafeOrUnsupportedCombinations(t *testi
 			}
 		})
 	}
-	for _, args := range [][]string{{"--all-projects", "logs"}, {"--project", "alpha", "--project", "beta", "logs"}} {
+	for _, args := range [][]string{{"--project", "alpha", "--project", "beta", "logs"}} {
 		result := runTestCLI(t, filepath.Join(t.TempDir(), "config.json"), newMemorySecrets(), map[string]string{"UPDOG_API_KEY": "updog_env"}, "", false, args...)
 		if result.status != 2 || !strings.Contains(result.stderr, "UPDOG_API_KEY") {
 			t.Fatalf("unexpected result: %+v", result)

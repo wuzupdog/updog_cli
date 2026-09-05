@@ -50,10 +50,11 @@ type projectFailure struct {
 }
 
 type projectResponse struct {
-	Project  string          `json:"project"`
-	URL      string          `json:"url,omitempty"`
-	Response json.RawMessage `json:"response,omitempty"`
-	Error    *projectFailure `json:"error,omitempty"`
+	Project   string          `json:"project"`
+	ProjectID int64           `json:"project_id,omitempty"`
+	URL       string          `json:"url,omitempty"`
+	Response  json.RawMessage `json:"response,omitempty"`
+	Error     *projectFailure `json:"error,omitempty"`
 }
 
 func (a *app) selectedProjects(g globalOptions) ([]string, error) {
@@ -80,6 +81,11 @@ func (a *app) getProjectsAndRender(g globalOptions, path string, query url.Value
 		return err
 	}
 	responses := a.requestProjects(names, path, query, kind)
+	return a.renderProjectResponses(g, responses, kind)
+}
+
+func (a *app) renderProjectResponses(g globalOptions, responses []projectResponse, kind string) error {
+	var err error
 	failed, exitCode := projectFailureCounts(responses)
 	if g.json || !a.outputIsTerminal() {
 		err = writeJSON(a.out, map[string]any{
@@ -99,22 +105,37 @@ func (a *app) getProjectsAndRender(g globalOptions, path string, query url.Value
 }
 
 func (a *app) requestProjects(names []string, path string, query url.Values, kind string) []projectResponse {
-	responses := make([]projectResponse, len(names))
-	auths := make([]resolvedAuth, len(names))
-	// Resolve keyring credentials serially before the bounded network workers.
-	for i, name := range names {
-		responses[i].Project = name
+	auths := make([]resolvedAuth, 0, len(names))
+	responses := make([]projectResponse, 0, len(names))
+	// Resolve credentials and discover grants before starting bounded network workers.
+	for _, name := range names {
 		auth, err := a.resolveAuth(name)
 		if err != nil {
-			responses[i].Error = projectError(err)
+			auths = append(auths, resolvedAuth{})
+			responses = append(responses, projectResponse{Project: name, Error: projectError(err)})
 			continue
 		}
-		auths[i] = auth
-		responses[i].URL = auth.baseURL
+		targets := []resolvedAuth{auth}
+		if len(auth.projects) > 1 {
+			targets, err = a.credentialTargets(auth)
+		}
+		if err != nil {
+			auths = append(auths, resolvedAuth{})
+			responses = append(responses, projectResponse{Project: name, URL: auth.baseURL, Error: projectError(err)})
+			continue
+		}
+		for _, target := range targets {
+			auths = append(auths, target)
+			responses = append(responses, projectResponse{Project: target.project, ProjectID: target.projectID, URL: target.baseURL})
+		}
 	}
+	return a.requestTargets(auths, responses, path, query, kind)
+}
+
+func (a *app) requestTargets(auths []resolvedAuth, responses []projectResponse, path string, query url.Values, kind string) []projectResponse {
 	var workers sync.WaitGroup
 	jobs := make(chan int)
-	for range min(projectConcurrency, len(names)) {
+	for range min(projectConcurrency, len(auths)) {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
@@ -123,7 +144,7 @@ func (a *app) requestProjects(names []string, path string, query url.Values, kin
 			}
 		}()
 	}
-	for i := range names {
+	for i := range auths {
 		if responses[i].Error == nil {
 			jobs <- i
 		}
@@ -134,8 +155,8 @@ func (a *app) requestProjects(names []string, path string, query url.Values, kin
 }
 
 func (a *app) requestProject(auth resolvedAuth, path string, query url.Values, kind string) projectResponse {
-	result := projectResponse{Project: auth.project, URL: auth.baseURL}
-	client := apiClient{baseURL: auth.baseURL, apiKey: auth.apiKey, version: a.version, httpClient: a.httpClient}
+	result := projectResponse{Project: auth.project, ProjectID: auth.projectID, URL: auth.baseURL}
+	client := apiClient{baseURL: auth.baseURL, apiKey: auth.apiKey, version: a.version, httpClient: a.httpClient, projectID: auth.projectID}
 	body, err := client.get(a.context, path, query)
 	if err != nil {
 		result.Error = projectError(a.apiCommandError("request failed", err))
