@@ -13,7 +13,7 @@ it against `SHA256SUMS`, and place `updog` somewhere on your `PATH`.
 For Apple silicon:
 
 ```sh
-version=v0.7.0
+version=v0.7.1
 archive="updog_${version#v}_darwin_arm64.tar.gz"
 curl -fsSLO "https://github.com/wuzupdog/updog_cli/releases/download/$version/$archive"
 curl -fsSLO "https://github.com/wuzupdog/updog_cli/releases/download/$version/SHA256SUMS"
@@ -26,7 +26,7 @@ The releases include macOS and Linux binaries for amd64/arm64 and Windows
 binaries for amd64/arm64. Developers with Go installed can instead run:
 
 ```sh
-go install github.com/wuzupdog/updog_cli/cmd/updog@v0.7.0
+go install github.com/wuzupdog/updog_cli/cmd/updog@v0.7.1
 ```
 
 Confirm the installation:
@@ -50,7 +50,7 @@ operating system credential store. The configuration file contains only safe
 project metadata and a credential reference. Nothing needs to be added to
 `.bashrc`, `.zshrc`, or the repository.
 
-Only project owners and admins can approve a CLI login for that project.
+Project owners, admins, and regular members can approve a CLI login for projects they belong to once the server member-access update is deployed. Members can also create manual read-only keys on the project page. Ingestion key creation and key listing/revocation remain restricted to owners and admins. Existing CLI versions work with this server permission change; upgrading is optional.
 
 No project flags are needed at login. A single selection uses the project slug
 as its local profile name; multiple selections use `default`. Optionally,
@@ -254,7 +254,7 @@ go build ./cmd/updog
 Build all release archives locally:
 
 ```sh
-./scripts/build-release.sh v0.7.0
+./scripts/build-release.sh v0.7.1
 ```
 
 ## License

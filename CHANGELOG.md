@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.1
+
+- Document read-only CLI login and manual key creation for regular project members.
+- Permission checks remain server-side; device requests, scopes, responses, and existing CLI compatibility are unchanged.
+- Deploy the server member-access update before publishing this documentation release. Existing CLI versions gain member access without an upgrade. Tag only after merge and coordinated rollout approval.
+
 ## 0.7.0
 
 - Select one or more projects during plain `updog login` and store one credential granting exactly that selection.

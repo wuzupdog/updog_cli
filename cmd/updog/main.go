@@ -9,7 +9,7 @@ import (
 	"github.com/wuzupdog/updog_cli/internal/cli"
 )
 
-var version = "0.7.0"
+var version = "0.7.1"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
