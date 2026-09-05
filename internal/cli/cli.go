@@ -63,8 +63,10 @@ type app struct {
 }
 
 type globalOptions struct {
-	project string
-	json    bool
+	project     string
+	projects    []string
+	allProjects bool
+	json        bool
 }
 
 type commandError struct {
@@ -198,6 +200,10 @@ func (a *app) run() int {
 		return 0
 	}
 
+	if err := globals.validateCommand(args); err != nil {
+		return a.finish(err)
+	}
+
 	var commandErr error
 	switch args[0] {
 	case "help", "-h", "--help":
@@ -264,24 +270,28 @@ func parseGlobals(args []string) (globalOptions, []string, error) {
 	for index := 0; index < len(args); index++ {
 		arg := args[index]
 		switch {
+		case arg == "--all-projects":
+			globals.allProjects = true
 		case arg == "--json":
 			globals.json = true
 		case arg == "--project":
 			if index+1 >= len(args) {
 				return globals, nil, usageError("option --project requires a value")
 			}
-			globals.project = args[index+1]
+			if err := globals.addProject(args[index+1]); err != nil {
+				return globals, nil, err
+			}
 			index++
 		case strings.HasPrefix(arg, "--project="):
-			globals.project = strings.TrimPrefix(arg, "--project=")
+			if err := globals.addProject(strings.TrimPrefix(arg, "--project=")); err != nil {
+				return globals, nil, err
+			}
 		default:
 			remaining = append(remaining, arg)
 		}
 	}
-	if globals.project != "" {
-		if err := validateProjectName(globals.project); err != nil {
-			return globals, nil, usageError(err.Error())
-		}
+	if globals.allProjects && len(globals.projects) > 0 {
+		return globals, nil, usageError("--all-projects cannot be combined with --project")
 	}
 	return globals, remaining, nil
 }
@@ -820,6 +830,9 @@ func configPersistenceError(primary, rollback error) error {
 }
 
 func (a *app) getAndRender(globals globalOptions, path string, query url.Values, kind string) error {
+	if globals.multipleProjects() {
+		return a.getProjectsAndRender(globals, path, query, kind)
+	}
 	auth, err := a.resolveAuth(globals.project)
 	if err != nil {
 		return err
@@ -940,7 +953,8 @@ Usage:
   updog version
 
 Global options:
-  --project NAME  Use a configured project
+  --project NAME  Use a configured project; repeat for multiple projects
+  --all-projects  Query every configured project
   --json          Force compact JSON output
 
 Authentication:
@@ -949,6 +963,8 @@ Authentication:
   UPDOG_API_KEY overrides stored credentials for CI and automation.
   UPDOG_URL changes the server URL for environment-key authentication.
 
+Multiple project selection works with hosts, logs, and errors.
+Results and pagination remain grouped by project; failures exit nonzero.
 When stdout is not a terminal, command results are JSON automatically.`)
 }
 
@@ -973,11 +989,12 @@ func (a *app) printProjectsHelp() {
   updog projects use NAME
 
 Projects are local profiles backed by separately authorized, project-scoped
-read keys. Run updog login again to authorize another project.`)
+read keys. Run updog login again to authorize another project.
+Repeat --project NAME or use --all-projects on telemetry commands to query them together.`)
 }
 
 func (a *app) printLogsHelp() {
-	fmt.Fprintln(a.out, `Usage: updog [--project NAME] logs search [options]
+	fmt.Fprintln(a.out, `Usage: updog [--project NAME ... | --all-projects] logs search [options]
 
 Options:
   --query VALUE       Search log messages and metadata
@@ -988,8 +1005,8 @@ Options:
   --until VALUE       RFC3339 timestamp
   --sort-by VALUE     logged_at, level, hostname, or trace_id
   --sort-dir VALUE    asc or desc
-  --limit VALUE       Results per page (maximum 200)
-  --offset VALUE      Result offset (maximum 10000)`)
+  --limit VALUE       Results per page (maximum 200) per project
+  --offset VALUE      Result offset (maximum 10000) per project`)
 }
 
 func (a *app) printHostsHelp() {
@@ -999,14 +1016,14 @@ func (a *app) printHostsHelp() {
 }
 
 func (a *app) printHostsListHelp() {
-	fmt.Fprintln(a.out, `Usage: updog [--project NAME] hosts list
+	fmt.Fprintln(a.out, `Usage: updog [--project NAME ... | --all-projects] hosts list
 
 Lists host snapshots discovered from Updog Agent metrics during the last 30 days.
 Snapshot measurements use samples from the last ten minutes.`)
 }
 
 func (a *app) printHostsShowHelp() {
-	fmt.Fprintln(a.out, `Usage: updog [--project NAME] hosts show HOSTNAME
+	fmt.Fprintln(a.out, `Usage: updog [--project NAME ... | --all-projects] hosts show HOSTNAME
 
 Shows CPU, load, memory, swap, filesystem, disk, network, file descriptor,
 and current top-process data for one exact hostname.`)
@@ -1019,23 +1036,23 @@ func (a *app) printErrorsHelp() {
 }
 
 func (a *app) printErrorsSearchHelp() {
-	fmt.Fprintln(a.out, `Usage: updog [--project NAME] errors search [options]
+	fmt.Fprintln(a.out, `Usage: updog [--project NAME ... | --all-projects] errors search [options]
 
 Options:
   --query VALUE       Search class, message, and fingerprint
   --status VALUE      unresolved, resolved, or ignored
   --since VALUE       Relative duration, RFC3339 timestamp, or all
   --until VALUE       RFC3339 timestamp
-  --limit VALUE       Results per page (maximum 200)
-  --offset VALUE      Result offset (maximum 10000)`)
+  --limit VALUE       Results per page (maximum 200) per project
+  --offset VALUE      Result offset (maximum 10000) per project`)
 }
 
 func (a *app) printErrorsShowHelp() {
-	fmt.Fprintln(a.out, `Usage: updog [--project NAME] errors show ID [options]
+	fmt.Fprintln(a.out, `Usage: updog [--project NAME ... | --all-projects] errors show ID [options]
 
 Options:
   --since VALUE       Relative duration, RFC3339 timestamp, or all
   --until VALUE       RFC3339 timestamp
-  --limit VALUE       Occurrences per page (maximum 100)
-  --offset VALUE      Occurrence offset (maximum 10000)`)
+  --limit VALUE       Occurrences per page (maximum 100) per project
+  --offset VALUE      Occurrence offset (maximum 10000) per project`)
 }
