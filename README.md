@@ -13,7 +13,7 @@ it against `SHA256SUMS`, and place `updog` somewhere on your `PATH`.
 For Apple silicon:
 
 ```sh
-version=v0.5.0
+version=v0.6.0
 archive="updog_${version#v}_darwin_arm64.tar.gz"
 curl -fsSLO "https://github.com/wuzupdog/updog_cli/releases/download/$version/$archive"
 curl -fsSLO "https://github.com/wuzupdog/updog_cli/releases/download/$version/SHA256SUMS"
@@ -26,7 +26,7 @@ The releases include macOS and Linux binaries for amd64/arm64 and Windows
 binaries for amd64/arm64. Developers with Go installed can instead run:
 
 ```sh
-go install github.com/wuzupdog/updog_cli/cmd/updog@v0.5.0
+go install github.com/wuzupdog/updog_cli/cmd/updog@v0.6.0
 ```
 
 Confirm the installation:
@@ -62,7 +62,7 @@ updog login --project mnm-production
 For a self-hosted or local Updog server:
 
 ```sh
-updog login --project mnm --url http://localhost:4000
+updog login --project mnm --url https://updog.orb.local
 ```
 
 HTTPS is required for remote servers. Plain HTTP is accepted only for loopback
@@ -102,6 +102,57 @@ updog --project mnm logs search --hostname worker-1 --limit 100
 updog --project mnm errors search --query ArgumentError
 updog --project mnm hosts show worker-1
 ```
+
+### Query multiple projects
+
+Requires CLI 0.6.0 or newer. Run `updog login` once per project (or import
+an existing read-only key using `--manual --project NAME`). Each profile keeps
+its own credential. Query selected profiles together or all saved profiles:
+
+```sh
+updog --project mnm --project updog logs search --query timeout --since 1h
+updog --all-projects errors search --status unresolved --since 7d
+updog --all-projects hosts list
+```
+
+Repeat `--project NAME`; duplicate profile names are queried once. Explicit
+profiles keep the supplied order; `--all-projects` sorts profiles by name.
+These selectors work with all hosts, logs, and errors commands and do not change
+the current profile. Login, logout, and profile management still operate on
+one profile. `--all-projects` cannot be combined with `--project` or
+`UPDOG_API_KEY`; multiple explicit profiles also cannot use `UPDOG_API_KEY`.
+
+Up to four requests run concurrently using each profile's own server and key.
+Filters, sorting, `--limit`, and `--offset` apply independently to every project;
+results are grouped, not merged into one globally sorted page. Each response
+retains its own window and pagination metadata. For `errors show ID` or
+`hosts show HOSTNAME`, the same ID or hostname is looked up in each selected
+project; use one profile when you want one specific project's detail.
+
+Terminals show a labeled section for each profile. JSON wraps the original API
+response under `response` without changing its fields:
+
+```json
+{
+  "data": [
+    {
+      "project": "mnm",
+      "url": "https://wuzupdog.com",
+      "response": {"data": [], "meta": {"pagination": {"total": 0}}}
+    }
+  ],
+  "meta": {"projects": 1, "succeeded": 1, "failed": 0}
+}
+```
+
+`--all-projects` always uses this envelope, even with one configured profile.
+Single-profile commands keep their existing output. Failed profiles have an
+`error` instead of `response`, containing `message`, `exit_code`, and any JSON
+API `body` and rate-limit headers (`retry_after`, `rate_limit_limit`,
+`rate_limit_remaining`, `rate_limit_reset`). Successful results remain available.
+The command exits `1` for request failures, or `2` if any profile has a local
+configuration error. JSON includes each failure and stderr reports the failure
+count; terminal output also prints each project's error and retry headers.
 
 `logs search` supports `--query`, `--level`, `--hostname`, `--trace-id`,
 `--since`, `--until`, `--sort-by`, `--sort-dir`, `--limit`, and `--offset`.
@@ -190,7 +241,7 @@ go build ./cmd/updog
 Build all release archives locally:
 
 ```sh
-./scripts/build-release.sh v0.5.0
+./scripts/build-release.sh v0.6.0
 ```
 
 ## License
