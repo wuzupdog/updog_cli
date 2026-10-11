@@ -178,10 +178,10 @@ Both host commands include `ip_address`: the address the host's agent last
 reported from, as seen by Updog. It is often an IPv6 address. A host behind NAT
 shows its public egress address, and hosts that have not reported since the
 server began recording addresses show `—` (JSON `null`). For example, to fetch
-one machine's address for SSH:
+one machine's address for SSH with either single- or multi-project credentials:
 
 ```sh
-updog --project mnm --json hosts show zone-1 | jq -r '.data[0].ip_address'
+updog --project mnm --json hosts show zone-1 | jq -r '.. | .ip_address? // empty'
 ```
 
 ### Output
