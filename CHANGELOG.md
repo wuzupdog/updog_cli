@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.0
+
+- Show each host's reporting IP address in `hosts list` (new `IP ADDRESS` column) and `hosts show`. JSON output passes the server's additive `ip_address` field through unchanged.
+- The address is the one the host's agent last reported from, as seen by Updog, and is frequently IPv6. Hosts without a recorded address show `—`.
+- Requires the server host-address deployment for addresses to appear; older servers omit the field and the CLI shows `—`. No agent or ingestion-client release is required. Tag only after merge and coordinated rollout approval.
+
 ## 0.7.1
 
 - Document read-only CLI login and manual key creation for regular project members.

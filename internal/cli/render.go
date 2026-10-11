@@ -21,6 +21,7 @@ type hostSnapshot struct {
 	Service          string       `json:"service"`
 	Environment      string       `json:"environment"`
 	AgentVersion     string       `json:"agent_version"`
+	IPAddress        string       `json:"ip_address"`
 	LastSeenAt       string       `json:"last_seen_at"`
 	UptimeSeconds    *float64     `json:"uptime_seconds"`
 	LogicalCPUCount  *float64     `json:"logical_cpu_count"`
@@ -184,10 +185,10 @@ func renderHosts(out io.Writer, body []byte) error {
 		return err
 	}
 	tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "HOST\tSERVICE\tENVIRONMENT\tLAST SEEN\tCPU\tMEMORY\tLOAD 1/5/15\tAGENT")
+	fmt.Fprintln(tw, "HOST\tIP ADDRESS\tSERVICE\tENVIRONMENT\tLAST SEEN\tCPU\tMEMORY\tLOAD 1/5/15\tAGENT")
 	for _, host := range envelope.Data {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			host.Hostname, displayText(host.Service), displayText(host.Environment), host.LastSeenAt,
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			host.Hostname, displayText(host.IPAddress), displayText(host.Service), displayText(host.Environment), host.LastSeenAt,
 			formatPercent(host.CPUPercent), formatCapacitySummary(host.Memory), formatLoad(host.Load), displayText(host.AgentVersion))
 	}
 	if err := tw.Flush(); err != nil {
@@ -226,6 +227,7 @@ func decodeHosts(body []byte) (hostEnvelope, error) {
 
 func renderHostOverview(out io.Writer, host hostSnapshot) {
 	fmt.Fprintf(out, "%s\n", host.Hostname)
+	fmt.Fprintf(out, "IP address: %s\n", displayText(host.IPAddress))
 	fmt.Fprintf(out, "Service: %s  Environment: %s  Agent: %s\n", displayText(host.Service), displayText(host.Environment), displayText(host.AgentVersion))
 	fmt.Fprintf(out, "Last seen: %s  Uptime: %s  Logical CPUs: %s\n", displayText(host.LastSeenAt), formatDuration(host.UptimeSeconds), formatNumber(host.LogicalCPUCount))
 	fmt.Fprintf(out, "CPU: %s  I/O wait: %s  Load: %s\n", formatPercent(host.CPUPercent), formatPercent(host.CPUIOWaitPercent), formatLoad(host.Load))

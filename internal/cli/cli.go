@@ -1058,14 +1058,15 @@ func (a *app) printHostsListHelp() {
 	fmt.Fprintln(a.out, `Usage: updog [--project NAME ... | --all-projects] hosts list
 
 Lists host snapshots discovered from Updog Agent metrics during the last 30 days.
-Snapshot measurements use samples from the last ten minutes.`)
+Snapshot measurements use samples from the last ten minutes. IP ADDRESS is the
+address the host's agent last reported from, as seen by Updog.`)
 }
 
 func (a *app) printHostsShowHelp() {
 	fmt.Fprintln(a.out, `Usage: updog [--project NAME ... | --all-projects] hosts show HOSTNAME
 
-Shows CPU, load, memory, swap, filesystem, disk, network, file descriptor,
-and current top-process data for one exact hostname.`)
+Shows the reporting IP address with CPU, load, memory, swap, filesystem, disk,
+network, file descriptor, and current top-process data for one exact hostname.`)
 }
 
 func (a *app) printErrorsHelp() {

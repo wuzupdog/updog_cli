@@ -13,7 +13,7 @@ it against `SHA256SUMS`, and place `updog` somewhere on your `PATH`.
 For Apple silicon:
 
 ```sh
-version=v0.7.1
+version=v0.8.0
 archive="updog_${version#v}_darwin_arm64.tar.gz"
 curl -fsSLO "https://github.com/wuzupdog/updog_cli/releases/download/$version/$archive"
 curl -fsSLO "https://github.com/wuzupdog/updog_cli/releases/download/$version/SHA256SUMS"
@@ -26,7 +26,7 @@ The releases include macOS and Linux binaries for amd64/arm64 and Windows
 binaries for amd64/arm64. Developers with Go installed can instead run:
 
 ```sh
-go install github.com/wuzupdog/updog_cli/cmd/updog@v0.7.1
+go install github.com/wuzupdog/updog_cli/cmd/updog@v0.8.0
 ```
 
 Confirm the installation:
@@ -174,6 +174,16 @@ measurements sampled from the last ten minutes. `hosts show HOSTNAME` displays
 the full snapshot for one machine, including its current top processes by CPU
 and memory.
 
+Both host commands include `ip_address`: the address the host's agent last
+reported from, as seen by Updog. It is often an IPv6 address. A host behind NAT
+shows its public egress address, and hosts that have not reported since the
+server began recording addresses show `—` (JSON `null`). For example, to fetch
+one machine's address for SSH:
+
+```sh
+updog --project mnm --json hosts show zone-1 | jq -r '.data[0].ip_address'
+```
+
 ### Output
 
 - Interactive terminals receive compact tables.
@@ -254,7 +264,7 @@ go build ./cmd/updog
 Build all release archives locally:
 
 ```sh
-./scripts/build-release.sh v0.7.1
+./scripts/build-release.sh v0.8.0
 ```
 
 ## License
