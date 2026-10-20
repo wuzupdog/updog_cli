@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.0
+
+- Add `metrics list` and `metrics show NAME` for application and host metrics such as Unity zone-server tick timings. `metrics show` returns time buckets with average, maximum, minimum, and sample count, and accepts `--since`, `--until`, `--hostname`, `--service`, `--environment`, `--zone`, and `--zone-server-id`.
+- Request project-scoped `metrics:read` on device login alongside `errors:read`, `hosts:read`, and `logs:read`. Both commands work with `--project` and `--all-projects`.
+- Requires the server metrics read API deployment, which also grants `metrics:read` to existing CLI credentials. Log in with an older server fails until the server is deployed; CLI 0.8.0 and older keep working against the new server. No agent or ingestion-client release is required. Tag only after merge and coordinated rollout approval.
+
 ## 0.8.0
 
 - Show each host's reporting IP address in `hosts list` (new `IP ADDRESS` column) and `hosts show`. JSON output passes the server's additive `ip_address` field through unchanged.

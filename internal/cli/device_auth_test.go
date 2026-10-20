@@ -15,6 +15,17 @@ import (
 	"time"
 )
 
+func TestExactReadScopeRequiresEveryCLIScope(t *testing.T) {
+	if !exactReadScope("metrics:read logs:read errors:read hosts:read") {
+		t.Fatal("reordered full scope should be accepted")
+	}
+	for _, value := range []string{"", "errors:read hosts:read logs:read", "errors:read hosts:read logs:read metrics:read deployments", "errors:read hosts:read logs:read logs:read"} {
+		if exactReadScope(value) {
+			t.Fatalf("%q should be rejected", value)
+		}
+	}
+}
+
 func TestDeviceLoginPollsAndStoresProjectCredential(t *testing.T) {
 	const (
 		deviceCode = "device_code_that_must_never_be_printed_123"

@@ -32,10 +32,10 @@ func (g globalOptions) validateCommand(args []string) error {
 		return nil
 	}
 	switch args[0] {
-	case "logs", "errors", "hosts", "help":
+	case "logs", "errors", "hosts", "metrics", "help":
 		return nil
 	default:
-		return usageError("multiple projects are supported only for hosts, logs, and errors")
+		return usageError("multiple projects are supported only for hosts, metrics, logs, and errors")
 	}
 }
 

@@ -131,6 +131,32 @@ type errorDetailEnvelope struct {
 	Meta responseMeta `json:"meta"`
 }
 
+type metricNamesEnvelope struct {
+	Data []string `json:"data"`
+	Meta struct {
+		Total int64 `json:"total"`
+	} `json:"meta"`
+}
+
+type metricEnvelope struct {
+	Data []struct {
+		Bucket      string   `json:"bucket"`
+		Avg         *float64 `json:"avg"`
+		Max         *float64 `json:"max"`
+		Min         *float64 `json:"min"`
+		SampleCount int64    `json:"sample_count"`
+	} `json:"data"`
+	Meta struct {
+		Name          string `json:"name"`
+		BucketSeconds int64  `json:"bucket_seconds"`
+		Total         int64  `json:"total"`
+		Window        struct {
+			Since string `json:"since"`
+			Until string `json:"until"`
+		} `json:"window"`
+	} `json:"meta"`
+}
+
 type responseMeta struct {
 	Pagination struct {
 		Total   int64 `json:"total"`
@@ -156,6 +182,10 @@ func renderAPIResponse(out io.Writer, kind string, body []byte, asJSON bool) err
 		return renderHosts(out, body)
 	case "host":
 		return renderHost(out, body)
+	case "metric-names":
+		return renderMetricNames(out, body)
+	case "metric":
+		return renderMetric(out, body)
 	case "logs":
 		return renderLogs(out, body)
 	case "errors":
@@ -353,6 +383,51 @@ func formatDuration(value *float64) string {
 		return fmt.Sprintf("%dh %dm", hours, minutes)
 	}
 	return fmt.Sprintf("%dm", minutes)
+}
+
+func renderMetricNames(out io.Writer, body []byte) error {
+	var envelope metricNamesEnvelope
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return fmt.Errorf("decode metric names response: %w", err)
+	}
+	fmt.Fprintln(out, "NAME")
+	for _, name := range envelope.Data {
+		fmt.Fprintln(out, name)
+	}
+	_, err := fmt.Fprintf(out, "\nShowing %d of %d metrics\n", len(envelope.Data), envelope.Meta.Total)
+	return err
+}
+
+func renderMetric(out io.Writer, body []byte) error {
+	var envelope metricEnvelope
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return fmt.Errorf("decode metric response: %w", err)
+	}
+	fmt.Fprintf(out, "%s\n", envelope.Meta.Name)
+	fmt.Fprintf(out, "Window: %s to %s  Bucket: %s\n\n", displayText(envelope.Meta.Window.Since), displayText(envelope.Meta.Window.Until), formatBucketSeconds(envelope.Meta.BucketSeconds))
+	tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "BUCKET\tAVG\tMAX\tMIN\tSAMPLES")
+	for _, point := range envelope.Data {
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\n", point.Bucket, formatDecimal(point.Avg), formatDecimal(point.Max), formatDecimal(point.Min), point.SampleCount)
+	}
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintf(out, "\nShowing %d of %d buckets\n", len(envelope.Data), envelope.Meta.Total)
+	return err
+}
+
+func formatBucketSeconds(seconds int64) string {
+	switch {
+	case seconds <= 0:
+		return "—"
+	case seconds%3600 == 0:
+		return fmt.Sprintf("%dh", seconds/3600)
+	case seconds%60 == 0:
+		return fmt.Sprintf("%dm", seconds/60)
+	default:
+		return fmt.Sprintf("%ds", seconds)
+	}
 }
 
 func renderLogs(out io.Writer, body []byte) error {
