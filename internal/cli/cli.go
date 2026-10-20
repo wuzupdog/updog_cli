@@ -220,6 +220,8 @@ func (a *app) run() int {
 		commandErr = a.projects(globals, args[1:])
 	case "hosts":
 		commandErr = a.hosts(globals, args[1:])
+	case "metrics":
+		commandErr = a.metrics(globals, args[1:])
 	case "logs":
 		commandErr = a.logs(globals, args[1:])
 	case "errors":
@@ -717,6 +719,70 @@ func (a *app) hostShow(globals globalOptions, args []string) error {
 	return a.getAndRender(globals, "/api/v1/hosts", url.Values{"hostname": {hostname}}, "host")
 }
 
+func (a *app) metrics(globals globalOptions, args []string) error {
+	if len(args) == 0 || args[0] == "list" {
+		if len(args) > 0 {
+			args = args[1:]
+		}
+		return a.metricsList(globals, args)
+	}
+	if args[0] == "show" {
+		return a.metricShow(globals, args[1:])
+	}
+	if args[0] == "-h" || args[0] == "--help" {
+		a.printMetricsHelp()
+		return nil
+	}
+	return usageError("unknown metrics command: " + args[0])
+}
+
+func (a *app) metricsList(globals globalOptions, args []string) error {
+	if hasHelp(args) {
+		a.printMetricsListHelp()
+		return nil
+	}
+	if len(args) != 0 {
+		return usageError("metrics list does not accept positional arguments")
+	}
+	return a.getAndRender(globals, "/api/v1/metrics/names", nil, "metric-names")
+}
+
+func (a *app) metricShow(globals globalOptions, args []string) error {
+	if hasHelp(args) {
+		a.printMetricsShowHelp()
+		return nil
+	}
+	if len(args) == 0 {
+		return usageError("metrics show requires a metric name")
+	}
+	name := strings.TrimSpace(args[0])
+	if name == "" || strings.HasPrefix(name, "-") {
+		return usageError("metrics show requires a metric name before its options")
+	}
+	fs := newFlagSet("metrics show")
+	since := fs.String("since", "", "start time")
+	until := fs.String("until", "", "end time")
+	hostname := fs.String("hostname", "", "hostname")
+	service := fs.String("service", "", "service")
+	environment := fs.String("environment", "", "environment")
+	zone := fs.String("zone", "", "zone")
+	zoneServerID := fs.String("zone-server-id", "", "zone server ID")
+	if err := fs.Parse(args[1:]); err != nil {
+		return usageError(err.Error())
+	}
+	if fs.NArg() != 0 {
+		return usageError("metrics show accepts one metric name")
+	}
+	values := visitedValues(fs, map[string]queryValue{
+		"since": {"since", *since}, "until": {"until", *until},
+		"hostname": {"hostname", *hostname}, "service": {"service", *service},
+		"environment": {"environment", *environment},
+		"zone":        {"zone", *zone}, "zone-server-id": {"zone_server_id", *zoneServerID},
+	})
+	values.Set("name", name)
+	return a.getAndRender(globals, "/api/v1/metrics", values, "metric")
+}
+
 func (a *app) errors(globals globalOptions, args []string) error {
 	if len(args) == 0 || args[0] == "search" {
 		if len(args) > 0 {
@@ -974,7 +1040,7 @@ func visitedValues(fs *flag.FlagSet, mappings map[string]queryValue) url.Values 
 }
 
 func (a *app) printHelp() {
-	fmt.Fprintln(a.out, `updog - inspect Updog hosts, logs, and errors
+	fmt.Fprintln(a.out, `updog - inspect Updog hosts, metrics, logs, and errors
 
 Usage:
   updog login [--project NAME] [--url URL]
@@ -983,6 +1049,8 @@ Usage:
   updog projects use NAME
   updog [--project NAME] hosts list
   updog [--project NAME] hosts show HOSTNAME
+  updog [--project NAME] metrics list
+  updog [--project NAME] metrics show NAME [options]
   updog [--project NAME] logs search [options]
   updog [--project NAME] errors search [options]
   updog [--project NAME] errors show ID [options]
@@ -1000,7 +1068,7 @@ Authentication:
   UPDOG_API_KEY overrides stored credentials for CI and automation.
   UPDOG_URL changes the server URL for environment-key authentication.
 
-Multiple project selection works with hosts, logs, and errors.
+Multiple project selection works with hosts, metrics, logs, and errors.
 Results and pagination remain grouped by project; failures exit nonzero.
 When stdout is not a terminal, command results are JSON automatically.`)
 }
@@ -1011,7 +1079,7 @@ func (a *app) printLoginHelp() {
        updog login --token-stdin --project NAME [--url URL]
 
 The default flow displays a URL and short code. Sign in through the browser,
-choose one or more projects, and approve read-only hosts, logs, and errors access. The CLI then
+choose one or more projects, and approve read-only hosts, metrics, logs, and errors access. The CLI then
 stores the issued key in the operating system keyring.
 
 --project only sets a local credential alias; it never determines access.
@@ -1067,6 +1135,38 @@ func (a *app) printHostsShowHelp() {
 
 Shows the reporting IP address with CPU, load, memory, swap, filesystem, disk,
 network, file descriptor, and current top-process data for one exact hostname.`)
+}
+
+func (a *app) printMetricsHelp() {
+	fmt.Fprintln(a.out, `Usage:
+  updog [--project NAME] metrics list
+  updog [--project NAME] metrics show NAME [options]`)
+}
+
+func (a *app) printMetricsListHelp() {
+	fmt.Fprintln(a.out, `Usage: updog [--project NAME ... | --all-projects] metrics list
+
+Lists the metric names reported to the project during the last 14 days, including
+host-agent measurements and application StatsD metrics such as zone.tick.work.max.`)
+}
+
+func (a *app) printMetricsShowHelp() {
+	fmt.Fprintln(a.out, `Usage: updog [--project NAME ... | --all-projects] metrics show NAME [options]
+
+Shows one metric as time buckets with the average, maximum, minimum, and sample
+count per bucket. Bucket width follows the window, from 5 seconds to 3 hours.
+
+Options:
+  --since VALUE           Relative duration, RFC3339 timestamp, or all (14 days)
+  --until VALUE           RFC3339 timestamp
+  --hostname VALUE        Filter by exact hostname
+  --service VALUE         Filter by service role
+  --environment VALUE     Filter by environment
+  --zone VALUE            Filter by the zone tag of zone-server metrics
+  --zone-server-id VALUE  Filter by the zone_server_id tag of zone-server metrics
+
+Example:
+  updog metrics show zone.tick.work.max --hostname zone-1 --zone emerald --since 6h`)
 }
 
 func (a *app) printErrorsHelp() {

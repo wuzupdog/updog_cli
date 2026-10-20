@@ -32,7 +32,7 @@ func credentialServer(t *testing.T) (*httptest.Server, *atomic.Int32) {
 			}
 			writeDeviceStart(t, w, server.URL, "multi_device_code_12345678901234567890", "BCDFG-HJKLM", 5)
 		case deviceTokenPath:
-			fmt.Fprintf(w, `{"access_token":"updog_shared","token_type":"api_key","scope":"errors:read hosts:read logs:read","project":{"id":11,"name":"API","slug":"api"},"projects":%s}`, grantedProjectJSON)
+			fmt.Fprintf(w, `{"access_token":"updog_shared","token_type":"api_key","scope":"errors:read hosts:read logs:read metrics:read","project":{"id":11,"name":"API","slug":"api"},"projects":%s}`, grantedProjectJSON)
 		case "/api/v1/projects":
 			if r.Header.Get("X-API-Key") != "updog_shared" || r.Header.Get("X-Updog-Project-ID") != "" {
 				t.Error("incorrect discovery headers")

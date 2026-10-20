@@ -310,6 +310,93 @@ func TestHostsListRendersIPAddressColumn(t *testing.T) {
 	}
 }
 
+func TestMetricsListUsesNamesEndpointAndPreservesJSON(t *testing.T) {
+	const body = `{"data":["host.cpu.utilization","zone.tick.work.max"],"meta":{"total":2}}`
+	var received *http.Request
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		received = request.Clone(request.Context())
+		writer.Header().Set("Content-Type", "application/json")
+		io.WriteString(writer, body)
+	}))
+	defer server.Close()
+
+	result := runTestCLI(t, filepath.Join(t.TempDir(), "config.json"), newMemorySecrets(), map[string]string{
+		"UPDOG_API_KEY": "updog_metric_key",
+		"UPDOG_URL":     server.URL,
+	}, "", false, "metrics", "list")
+
+	if result.status != 0 || received == nil {
+		t.Fatalf("metrics list: status=%d stdout=%s stderr=%s", result.status, result.stdout, result.stderr)
+	}
+	if received.URL.Path != "/api/v1/metrics/names" || received.URL.RawQuery != "" {
+		t.Fatalf("request URL = %s", received.URL.String())
+	}
+	if strings.TrimSpace(result.stdout) != body {
+		t.Fatalf("JSON output changed: %s", result.stdout)
+	}
+
+	terminal := runTestCLI(t, filepath.Join(t.TempDir(), "config.json"), newMemorySecrets(), map[string]string{
+		"UPDOG_API_KEY": "updog_metric_key",
+		"UPDOG_URL":     server.URL,
+	}, "", true, "metrics")
+
+	if terminal.status != 0 {
+		t.Fatalf("metrics: status=%d stderr=%s", terminal.status, terminal.stderr)
+	}
+	for _, expected := range []string{"NAME\n", "zone.tick.work.max\n", "Showing 2 of 2 metrics"} {
+		if !strings.Contains(terminal.stdout, expected) {
+			t.Fatalf("output missing %q:\n%s", expected, terminal.stdout)
+		}
+	}
+}
+
+func TestMetricShowSendsFiltersAndRendersBuckets(t *testing.T) {
+	var received *http.Request
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		received = request.Clone(request.Context())
+		writer.Header().Set("Content-Type", "application/json")
+		io.WriteString(writer, `{"data":[{"bucket":"2026-09-01T11:59:30Z","avg":42.5,"max":61,"min":30.25,"sample_count":12},{"bucket":"2026-09-01T12:00:00Z","avg":null,"max":null,"min":null,"sample_count":0}],"meta":{"name":"zone.tick.work.max","bucket_seconds":30,"total":2,"filters":{"hostname":"zone 1/primary","zone":"emerald","zone_server_id":"7","service":null,"environment":null},"window":{"since":"2026-09-01T11:00:00Z","until":"2026-09-01T12:00:00Z"}}}`)
+	}))
+	defer server.Close()
+
+	result := runTestCLI(t, filepath.Join(t.TempDir(), "config.json"), newMemorySecrets(), map[string]string{
+		"UPDOG_API_KEY": "updog_metric_key",
+		"UPDOG_URL":     server.URL,
+	}, "", true, "metrics", "show", "zone.tick.work.max", "--since", "1h", "--hostname", "zone 1/primary", "--zone", "emerald", "--zone-server-id", "7")
+
+	if result.status != 0 || received == nil {
+		t.Fatalf("metrics show: status=%d stdout=%s stderr=%s", result.status, result.stdout, result.stderr)
+	}
+	query := received.URL.Query()
+	if received.URL.Path != "/api/v1/metrics" || query.Get("name") != "zone.tick.work.max" || query.Get("since") != "1h" ||
+		query.Get("hostname") != "zone 1/primary" || query.Get("zone") != "emerald" || query.Get("zone_server_id") != "7" {
+		t.Fatalf("request URL = %s", received.URL.String())
+	}
+	if _, present := query["until"]; present {
+		t.Fatalf("until should be omitted when not provided: %s", received.URL.RawQuery)
+	}
+	for _, expected := range []string{"zone.tick.work.max\n", "Window: 2026-09-01T11:00:00Z to 2026-09-01T12:00:00Z  Bucket: 30s", "BUCKET", "SAMPLES", "2026-09-01T11:59:30Z", "42.50", "61.00", "30.25", "12", "Showing 2 of 2 buckets"} {
+		if !strings.Contains(result.stdout, expected) {
+			t.Fatalf("output missing %q:\n%s", expected, result.stdout)
+		}
+	}
+	if fields := strings.Fields(strings.Split(result.stdout, "\n")[5]); len(fields) != 5 || fields[0] != "2026-09-01T12:00:00Z" || fields[1] != "—" || fields[4] != "0" {
+		t.Fatalf("empty bucket row should render placeholders:\n%s", result.stdout)
+	}
+}
+
+func TestMetricShowRequiresName(t *testing.T) {
+	for _, args := range [][]string{{"metrics", "show"}, {"metrics", "show", "--since", "1h"}, {"metrics", "show", "zone.tick.work.max", "extra"}, {"metrics", "bogus"}} {
+		result := runTestCLI(t, filepath.Join(t.TempDir(), "config.json"), newMemorySecrets(), map[string]string{
+			"UPDOG_API_KEY": "updog_metric_key",
+			"UPDOG_URL":     "https://updog.example",
+		}, "", false, args...)
+		if result.status != 2 || result.stdout != "" {
+			t.Fatalf("%v result = %#v", args, result)
+		}
+	}
+}
+
 func TestHostShowReportsMissingHost(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		io.WriteString(writer, `{"data":[],"meta":{"total":0}}`)

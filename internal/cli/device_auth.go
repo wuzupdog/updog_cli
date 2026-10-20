@@ -20,7 +20,7 @@ const (
 	deviceTokenPath         = "/api/v1/cli/device-authorizations/token"
 	deviceClientID          = "updog_cli"
 	deviceGrantType         = "urn:ietf:params:oauth:grant-type:device_code"
-	deviceReadScope         = "errors:read hosts:read logs:read"
+	deviceReadScope         = "errors:read hosts:read logs:read metrics:read"
 	maxDevicePollInterval   = 60 * time.Second
 )
 
@@ -243,18 +243,24 @@ func unsafeProjectName(value string) bool {
 }
 
 func exactReadScope(value string) bool {
+	expected := strings.Fields(deviceReadScope)
 	fields := strings.Fields(value)
-	if len(fields) != 3 {
+	if len(fields) != len(expected) {
 		return false
 	}
 	found := map[string]bool{}
 	for _, field := range fields {
-		if field != "logs:read" && field != "errors:read" && field != "hosts:read" {
-			return false
-		}
 		found[field] = true
 	}
-	return found["logs:read"] && found["errors:read"] && found["hosts:read"]
+	if len(found) != len(expected) {
+		return false
+	}
+	for _, scope := range expected {
+		if !found[scope] {
+			return false
+		}
+	}
+	return true
 }
 
 func unsafeCode(value string) bool {

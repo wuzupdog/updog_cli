@@ -1,6 +1,6 @@
 # Updog CLI
 
-A read-only CLI for inspecting [Updog](https://wuzupdog.com) hosts and searching logs and errors.
+A read-only CLI for inspecting [Updog](https://wuzupdog.com) hosts and metrics and searching logs and errors.
 It is designed for humans and coding agents: terminals get readable tables,
 while redirected output is compact JSON.
 
@@ -44,7 +44,7 @@ updog login
 ```
 
 The CLI prints an Updog URL and a short code. Open the URL, sign in, enter the
-code, select one or more projects, and approve read-only access to their hosts, logs, and errors.
+code, select one or more projects, and approve read-only access to their hosts, metrics, logs, and errors.
 The CLI waits for approval, receives one key granting exactly those projects, and stores it in the
 operating system credential store. The configuration file contains only safe
 project metadata and a credential reference. Nothing needs to be added to
@@ -96,6 +96,8 @@ updog errors search --status unresolved --since 7d
 updog errors show 42 --since 24h --limit 50
 updog hosts list
 updog hosts show zone-1
+updog metrics list
+updog metrics show zone.tick.work.max --hostname zone-1 --since 6h
 ```
 
 Select a saved credential profile explicitly when an agent should not depend
@@ -174,6 +176,21 @@ measurements sampled from the last ten minutes. `hosts show HOSTNAME` displays
 the full snapshot for one machine, including its current top processes by CPU
 and memory.
 
+`metrics list` returns the metric names reported during the last 14 days, so an
+agent can discover application measurements such as `zone.tick.work.max` next to
+host-agent metrics. `metrics show NAME` returns time buckets with the average,
+maximum, minimum, and sample count; bucket width follows the window, from five
+seconds for short windows to three hours for the full 14-day retention. It
+supports `--since`, `--until`, `--hostname`, `--service`, `--environment`, and,
+for zone-server metrics tagged by the Unity client, `--zone` and
+`--zone-server-id`. Filters select one exact value, so several zone servers on
+one host are never averaged together accidentally:
+
+```sh
+updog --project mnm metrics show zone.tick.work.max --hostname zone-1 --zone emerald --since 1h
+updog --project mnm --json metrics show zone.network.ping.p95 --since 24h | jq '.data[] | select(.max > 150)'
+```
+
 Both host commands include `ip_address`: the address the host's agent last
 reported from, as seen by Updog. It is often an IPv6 address. A host behind NAT
 shows its public egress address, and hosts that have not reported since the
@@ -198,6 +215,15 @@ This makes agent calls predictable:
 ```sh
 updog --project mnm --json logs search --level error --since 30m
 ```
+
+## MCP instead of the CLI
+
+Coding agents that support the Model Context Protocol can skip this binary
+and connect to `https://wuzupdog.com/mcp` with the same read-only key as a
+static `Authorization: Bearer` header. The MCP tools mirror these commands and
+gain new read features on server deploy without a CLI release. See
+[the read API guide](https://wuzupdog.com/docs/read-api.md) for Claude Code and
+Codex configuration.
 
 ## CI and noninteractive agents
 
@@ -232,7 +258,8 @@ not credentials, to `AGENTS.md`:
 ```md
 Use `updog --project mnm logs search` and
 `updog --project mnm errors search` when diagnosing production problems.
-Use `updog --project mnm hosts list` for current Linux host health.
+Use `updog --project mnm hosts list` for current Linux host health and
+`updog --project mnm metrics show zone.tick.work.max` for zone-server tick timing.
 Updog access is read-only. Run these commands on the host.
 ```
 
@@ -240,7 +267,7 @@ Updog access is read-only. Run these commands on the host.
 
 - Interactive credentials are stored through the operating system credential
   manager (macOS Keychain, Windows Credential Manager, or Linux Secret Service).
-- Device login grants only `hosts:read`, `logs:read`, and `errors:read` for exactly the projects
+- Device login grants only `hosts:read`, `metrics:read`, `logs:read`, and `errors:read` for exactly the projects
   selected during browser approval (up to 100).
 - Project metadata is stored in the user configuration directory with mode
   `0600` on Unix systems and never contains the API key.
